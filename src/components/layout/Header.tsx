@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Search, ChevronDown } from 'lucide-react';
+import { Bell, Search, LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -11,17 +11,18 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
-import { UserRole } from '@/types';
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 export function Header() {
-  const { user, switchRole } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
-  const roles: { value: UserRole; label: string }[] = [
-    { value: 'admin', label: 'Admin' },
-    { value: 'technician', label: 'Technician' },
-    { value: 'support', label: 'Customer Support' },
-    { value: 'bookkeeping', label: 'Bookkeeping' },
-  ];
+  const handleLogout = async () => {
+    await logout();
+    toast.success('Logged out successfully');
+    navigate('/login');
+  };
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-6">
@@ -35,29 +36,12 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-4">
-        {/* Role Switcher (Demo) */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="gap-2">
-              <span className="text-xs uppercase tracking-wider text-muted-foreground">Role:</span>
-              <span className="font-medium capitalize">{user?.role}</span>
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Switch Role (Demo)</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {roles.map(role => (
-              <DropdownMenuItem
-                key={role.value}
-                onClick={() => switchRole(role.value)}
-                className={user?.role === role.value ? 'bg-muted' : ''}
-              >
-                {role.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Role Badge */}
+        {user?.role && (
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-medium">
+            <span className="capitalize">{user.role}</span>
+          </div>
+        )}
 
         {/* Notifications */}
         <Button variant="ghost" size="icon" className="relative">
@@ -67,12 +51,33 @@ export function Header() {
           </span>
         </Button>
 
-        {/* User Avatar */}
-        {user && (
-          <div className="flex h-9 w-9 items-center justify-center rounded-full gradient-primary text-white font-semibold text-sm">
-            {user.name.charAt(0)}
-          </div>
-        )}
+        {/* User Menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="flex items-center gap-2 px-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full gradient-primary text-white font-semibold text-sm">
+                {user?.name?.charAt(0) || 'U'}
+              </div>
+              <div className="hidden sm:block text-left">
+                <p className="text-sm font-medium">{user?.name || 'User'}</p>
+                <p className="text-xs text-muted-foreground">{user?.email}</p>
+              </div>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem>
+              <User className="h-4 w-4 mr-2" />
+              Profile
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
