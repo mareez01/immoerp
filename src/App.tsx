@@ -13,6 +13,7 @@ import StaffPage from "@/pages/Staff";
 import CustomersPage from "@/pages/Customers";
 import InvoicesPage from "@/pages/Invoices";
 import WorksheetsPage from "@/pages/Worksheets";
+import SupportTicketsPage from "@/pages/SupportTickets";
 import CustomerPortalOrders from "@/pages/portal/CustomerOrders";
 import CustomerPortalInvoices from "@/pages/portal/CustomerInvoices";
 import CustomerPortalSupport from "@/pages/portal/CustomerSupport";
@@ -61,6 +62,11 @@ const App = () => (
               <Route path="/worksheets" element={
                 <ProtectedRoute allowedRoles={['admin', 'technician']}>
                   <WorksheetsPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/tickets" element={
+                <ProtectedRoute allowedRoles={['admin', 'support']}>
+                  <SupportTicketsPage />
                 </ProtectedRoute>
               } />
             </Route>
