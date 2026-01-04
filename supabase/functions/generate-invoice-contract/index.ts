@@ -347,6 +347,7 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     const invoiceNumber = invoiceNumberData as string;
+    const contractId = `AMC-${amc_form_id.slice(0, 8).toUpperCase()}`;
     console.log(`Generated invoice number: ${invoiceNumber}`);
 
     // Calculate validity period (1 year from now)
@@ -360,6 +361,51 @@ const handler = async (req: Request): Promise<Response> => {
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + 15);
 
+    // Generate HTML documents
+    const invoiceHTML = generateInvoiceHTML(order, invoiceNumber, validityStartStr, validityEndStr);
+    const contractHTML = generateContractHTML(order, contractId, validityStartStr, validityEndStr);
+    const emailHTML = generateEmailHTML(order, invoiceNumber, validityStartStr, validityEndStr);
+
+    // Upload invoice to storage
+    const invoiceFileName = `${amc_form_id}/invoice-${invoiceNumber}.html`;
+    const { error: invoiceUploadError } = await supabase.storage
+      .from('documents')
+      .upload(invoiceFileName, invoiceHTML, {
+        contentType: 'text/html',
+        upsert: true
+      });
+
+    if (invoiceUploadError) {
+      console.error("Error uploading invoice:", invoiceUploadError);
+    }
+
+    // Upload contract to storage
+    const contractFileName = `${amc_form_id}/contract-${contractId}.html`;
+    const { error: contractUploadError } = await supabase.storage
+      .from('documents')
+      .upload(contractFileName, contractHTML, {
+        contentType: 'text/html',
+        upsert: true
+      });
+
+    if (contractUploadError) {
+      console.error("Error uploading contract:", contractUploadError);
+    }
+
+    // Get signed URLs for the documents (valid for 1 year)
+    const { data: invoiceUrlData } = await supabase.storage
+      .from('documents')
+      .createSignedUrl(invoiceFileName, 31536000); // 1 year
+
+    const { data: contractUrlData } = await supabase.storage
+      .from('documents')
+      .createSignedUrl(contractFileName, 31536000);
+
+    const invoiceUrl = invoiceUrlData?.signedUrl || null;
+    const contractUrl = contractUrlData?.signedUrl || null;
+
+    console.log("Documents uploaded to storage");
+
     // Create invoice record in database
     const { data: invoice, error: invoiceError } = await supabase
       .from("invoices")
@@ -371,6 +417,8 @@ const handler = async (req: Request): Promise<Response> => {
         due_date: dueDate.toISOString().split("T")[0],
         validity_start: validityStart.toISOString().split("T")[0],
         validity_end: validityEnd.toISOString().split("T")[0],
+        invoice_url: invoiceUrl,
+        contract_url: contractUrl,
       })
       .select()
       .single();
@@ -381,11 +429,6 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     console.log(`Invoice created with ID: ${invoice.id}`);
-
-    // Generate HTML documents
-    const invoiceHTML = generateInvoiceHTML(order, invoiceNumber, validityStartStr, validityEndStr);
-    const contractHTML = generateContractHTML(order, `AMC-${amc_form_id.slice(0, 8).toUpperCase()}`, validityStartStr, validityEndStr);
-    const emailHTML = generateEmailHTML(order, invoiceNumber, validityStartStr, validityEndStr);
 
     // Send email with Resend API
     const emailResponse = await fetch("https://api.resend.com/emails", {
@@ -405,7 +448,7 @@ const handler = async (req: Request): Promise<Response> => {
             content: encodeBase64(invoiceHTML),
           },
           {
-            filename: `AMC-Contract-${amc_form_id.slice(0, 8).toUpperCase()}.html`,
+            filename: `AMC-Contract-${contractId}.html`,
             content: encodeBase64(contractHTML),
           },
         ],
@@ -433,6 +476,8 @@ const handler = async (req: Request): Promise<Response> => {
         success: true,
         invoice_id: invoice.id,
         invoice_number: invoiceNumber,
+        invoice_url: invoiceUrl,
+        contract_url: contractUrl,
         email_sent: true,
         validity_start: validityStart.toISOString().split("T")[0],
         validity_end: validityEnd.toISOString().split("T")[0],
