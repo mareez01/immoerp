@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
-import { Search, Filter, Eye, Mail, MessageSquare, MoreHorizontal, Phone, MapPin, CreditCard, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Filter, Eye, Mail, MessageSquare, MoreHorizontal, Phone, MapPin, CreditCard, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge, formatStatus } from '@/components/ui/status-badge';
 import { DrawerPanel } from '@/components/ui/drawer-panel';
@@ -13,31 +12,150 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { mockCustomers, mockOrders } from '@/data/mockData';
-import { Customer, CustomerStatus } from '@/types';
 import { format, differenceInDays } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
-const statusTabs: { value: string; label: string }[] = [
+interface Customer {
+  id: string;
+  user_id: string;
+  name: string;
+  company_name?: string;
+  email: string;
+  phone: string;
+  location: string;
+  status: string;
+  total_orders: number;
+  total_spent: number;
+  subscription_valid_until?: string;
+  created_at: string;
+}
+
+interface CustomerOrder {
+  amc_form_id: string;
+  status: string;
+  system_usage_purpose: string;
+  created_at: string;
+  amount?: string;
+}
+
+const statusTabs = [
   { value: 'all', label: 'All' },
   { value: 'active', label: 'Active' },
   { value: 'inactive', label: 'Inactive' },
-  { value: 'unsubscribed', label: 'Unsubscribed' },
 ];
 
 export default function CustomersPage() {
   const { user } = useAuth();
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedTab, setSelectedTab] = useState('all');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const canSendReminders = user?.role === 'admin' || user?.role === 'support';
 
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  const fetchCustomers = async () => {
+    try {
+      // Get all unique customers from amc_responses
+      const { data: orders, error } = await supabase
+        .from('amc_responses')
+        .select('customer_user_id, full_name, company_name, email, phone, city, state, created_at, amount, status')
+        .not('customer_user_id', 'is', null);
+
+      if (error) throw error;
+
+      // Fetch invoices for subscription info
+      const { data: invoices } = await supabase
+        .from('invoices')
+        .select('amc_order_id, validity_end, status, amount');
+
+      // Group orders by customer
+      const customerMap = new Map<string, Customer>();
+      
+      orders?.forEach(order => {
+        if (!order.customer_user_id) return;
+        
+        const existing = customerMap.get(order.customer_user_id);
+        const orderAmount = parseFloat(order.amount || '0');
+        
+        if (existing) {
+          existing.total_orders += 1;
+          existing.total_spent += orderAmount;
+        } else {
+          customerMap.set(order.customer_user_id, {
+            id: order.customer_user_id,
+            user_id: order.customer_user_id,
+            name: order.full_name,
+            company_name: order.company_name || undefined,
+            email: order.email,
+            phone: order.phone,
+            location: `${order.city}, ${order.state}`,
+            status: 'active',
+            total_orders: 1,
+            total_spent: orderAmount,
+            created_at: order.created_at,
+          });
+        }
+      });
+
+      // Add subscription info from invoices
+      invoices?.forEach(inv => {
+        if (inv.status === 'paid' && inv.validity_end) {
+          // Find customer by order
+          const order = orders?.find(o => o.customer_user_id);
+          if (order && customerMap.has(order.customer_user_id)) {
+            const customer = customerMap.get(order.customer_user_id)!;
+            if (!customer.subscription_valid_until || new Date(inv.validity_end) > new Date(customer.subscription_valid_until)) {
+              customer.subscription_valid_until = inv.validity_end;
+            }
+          }
+        }
+      });
+
+      // Determine status based on subscription
+      customerMap.forEach(customer => {
+        if (customer.subscription_valid_until) {
+          customer.status = new Date(customer.subscription_valid_until) > new Date() ? 'active' : 'inactive';
+        } else {
+          customer.status = 'inactive';
+        }
+      });
+
+      setCustomers(Array.from(customerMap.values()));
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+      toast.error('Failed to load customers');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchCustomerOrders = async (customerId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('amc_responses')
+        .select('amc_form_id, status, system_usage_purpose, created_at, amount')
+        .eq('customer_user_id', customerId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setCustomerOrders(data || []);
+    } catch (error) {
+      console.error('Error fetching customer orders:', error);
+    }
+  };
+
   const filteredCustomers = selectedTab === 'all'
-    ? mockCustomers
-    : mockCustomers.filter(c => c.status === selectedTab);
+    ? customers
+    : customers.filter(c => c.status === selectedTab);
 
   const columns: Column<Customer>[] = [
     {
@@ -140,6 +258,7 @@ export default function CustomersPage() {
 
   const handleView = (customer: Customer) => {
     setSelectedCustomer(customer);
+    fetchCustomerOrders(customer.user_id);
     setIsDrawerOpen(true);
   };
 
@@ -147,9 +266,16 @@ export default function CustomersPage() {
     toast.success(`${type === 'email' ? 'Email' : 'SMS'} reminder sent to ${customer.name}`);
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Customers</h1>
@@ -157,7 +283,6 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {/* Tabs */}
       <Tabs value={selectedTab} onValueChange={setSelectedTab}>
         <TabsList className="bg-muted/50 p-1">
           {statusTabs.map(tab => (
@@ -180,17 +305,10 @@ export default function CustomersPage() {
             searchPlaceholder="Search customers..."
             onRowClick={handleView}
             emptyMessage="No customers found"
-            actions={
-              <Button variant="outline" size="sm" className="gap-2">
-                <Filter className="h-4 w-4" />
-                Filters
-              </Button>
-            }
           />
         </TabsContent>
       </Tabs>
 
-      {/* Customer Details Drawer */}
       <DrawerPanel
         open={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
@@ -198,24 +316,33 @@ export default function CustomersPage() {
         subtitle={selectedCustomer?.email}
         size="xl"
       >
-        {selectedCustomer && <CustomerDetails customer={selectedCustomer} canSendReminders={canSendReminders} />}
+        {selectedCustomer && (
+          <CustomerDetails 
+            customer={selectedCustomer} 
+            orders={customerOrders}
+            canSendReminders={canSendReminders} 
+          />
+        )}
       </DrawerPanel>
     </div>
   );
 }
 
-function CustomerDetails({ customer, canSendReminders }: { customer: Customer; canSendReminders: boolean }) {
-  const customerOrders = mockOrders.filter(
-    o => o.email === customer.email || o.full_name === customer.name
-  );
-
+function CustomerDetails({ 
+  customer, 
+  orders,
+  canSendReminders 
+}: { 
+  customer: Customer; 
+  orders: CustomerOrder[];
+  canSendReminders: boolean;
+}) {
   const handleSendReminder = (type: 'invoice' | 'subscription') => {
     toast.success(`${type === 'invoice' ? 'Invoice' : 'Subscription'} reminder sent!`);
   };
 
   return (
     <div className="space-y-6">
-      {/* Customer Info */}
       <div className="flex items-center gap-4">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-xl">
           {customer.name.charAt(0)}
@@ -231,7 +358,6 @@ function CustomerDetails({ customer, canSendReminders }: { customer: Customer; c
         </div>
       </div>
 
-      {/* Contact Info */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex items-center gap-3 rounded-lg border p-4">
           <Mail className="h-5 w-5 text-muted-foreground" />
@@ -263,7 +389,6 @@ function CustomerDetails({ customer, canSendReminders }: { customer: Customer; c
         </div>
       </div>
 
-      {/* Subscription Info */}
       {customer.subscription_valid_until && (
         <div className="rounded-lg border p-4 bg-info/5">
           <div className="flex items-center justify-between">
@@ -291,12 +416,11 @@ function CustomerDetails({ customer, canSendReminders }: { customer: Customer; c
 
       <Separator />
 
-      {/* Order History */}
       <div>
-        <h4 className="font-semibold text-foreground mb-4">Order History ({customerOrders.length})</h4>
-        {customerOrders.length > 0 ? (
+        <h4 className="font-semibold text-foreground mb-4">Order History ({orders.length})</h4>
+        {orders.length > 0 ? (
           <div className="space-y-3">
-            {customerOrders.map(order => (
+            {orders.map(order => (
               <div
                 key={order.amc_form_id}
                 className="flex items-center justify-between rounded-lg border p-4 hover:bg-muted/30 transition-colors"
@@ -308,8 +432,8 @@ function CustomerDetails({ customer, canSendReminders }: { customer: Customer; c
                   </p>
                 </div>
                 <div className="text-right">
-                  <StatusBadge variant={order.status as any}>
-                    {formatStatus(order.status)}
+                  <StatusBadge variant={(order.status || 'new') as any}>
+                    {formatStatus(order.status || 'new')}
                   </StatusBadge>
                   {order.amount && (
                     <p className="text-sm font-medium mt-1">₹{order.amount}</p>
@@ -323,7 +447,6 @@ function CustomerDetails({ customer, canSendReminders }: { customer: Customer; c
         )}
       </div>
 
-      {/* Actions */}
       {canSendReminders && (
         <>
           <Separator />

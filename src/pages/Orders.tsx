@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Filter, Eye, Edit, UserMinus, MoreHorizontal, Phone, Mail, MapPin, Clock, Monitor, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -12,44 +12,199 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { mockOrders, mockStaff } from '@/data/mockData';
-import { AMCOrder, OrderStatus } from '@/types';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
-const statusTabs: { value: string; label: string; count: number }[] = [
-  { value: 'all', label: 'All', count: mockOrders.length },
-  { value: 'new', label: 'New', count: mockOrders.filter(o => o.status === 'new').length },
-  { value: 'pending', label: 'Pending', count: mockOrders.filter(o => o.status === 'pending').length },
-  { value: 'in_progress', label: 'In Progress', count: mockOrders.filter(o => o.status === 'in_progress').length },
-  { value: 'completed', label: 'Completed', count: mockOrders.filter(o => o.status === 'completed').length },
-];
+interface AMCOrder {
+  amc_form_id: string;
+  full_name: string;
+  company_name?: string;
+  email: string;
+  phone: string;
+  city: string;
+  district: string;
+  state: string;
+  problem_description?: string;
+  consent_remote_access?: boolean;
+  payment_status?: string;
+  created_at: string;
+  updated_at: string;
+  user_role: string;
+  system_usage_purpose: string;
+  urgency_level?: string;
+  remote_software_preference: string;
+  languages_known: string;
+  preferred_lang: string;
+  amount?: string;
+  status?: string;
+  amc_started?: boolean;
+  assigned_to?: string;
+  unsubscribed?: boolean;
+  daily_usage_hours?: string;
+  usage_pattern?: string;
+  current_performance?: string;
+  system_criticality?: string;
+  scheduled_date?: string;
+  scheduled_time?: string;
+  appointment_status?: string;
+  notes?: string;
+  service_work_description?: string;
+  assigned_to_name?: string;
+}
+
+interface AMCSystem {
+  id: number;
+  amc_form_id: string;
+  device_name?: string;
+  operating_system?: string;
+  device_type: string;
+}
+
+interface StaffMember {
+  id: string;
+  full_name: string;
+  user_id?: string;
+}
 
 export default function Orders() {
   const { user } = useAuth();
+  const [orders, setOrders] = useState<AMCOrder[]>([]);
+  const [staffList, setStaffList] = useState<StaffMember[]>([]);
+  const [systems, setSystems] = useState<Record<string, AMCSystem[]>>({});
   const [selectedTab, setSelectedTab] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState<AMCOrder | null>(null);
   const [isViewDrawerOpen, setIsViewDrawerOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const canEdit = user?.role === 'admin' || user?.role === 'support';
   const canAssign = user?.role === 'admin';
 
+  useEffect(() => {
+    fetchOrders();
+    fetchStaff();
+  }, []);
+
+  const fetchOrders = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('amc_responses')
+        .select('*')
+        .eq('unsubscribed', false)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // Fetch staff names for assigned orders
+      const assignedIds = [...new Set(data?.filter(o => o.assigned_to).map(o => o.assigned_to) || [])];
+      if (assignedIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', assignedIds);
+
+        const profileMap = new Map(profiles?.map(p => [p.id, p.full_name]) || []);
+
+        const ordersWithNames = data?.map(order => ({
+          ...order,
+          assigned_to_name: order.assigned_to ? profileMap.get(order.assigned_to) : undefined,
+        })) || [];
+
+        setOrders(ordersWithNames);
+      } else {
+        setOrders(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      toast.error('Failed to load orders');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchStaff = async () => {
+    try {
+      const { data: roles } = await supabase
+        .from('user_roles')
+        .select('user_id')
+        .eq('role', 'technician');
+
+      if (roles && roles.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, user_id')
+          .in('user_id', roles.map(r => r.user_id));
+
+        setStaffList(profiles || []);
+      }
+    } catch (error) {
+      console.error('Error fetching staff:', error);
+    }
+  };
+
+  const fetchSystems = async (orderId: string) => {
+    if (systems[orderId]) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('amc_systems')
+        .select('*')
+        .eq('amc_form_id', orderId);
+
+      if (error) throw error;
+      setSystems(prev => ({ ...prev, [orderId]: data || [] }));
+    } catch (error) {
+      console.error('Error fetching systems:', error);
+    }
+  };
+
+  const handleUpdateOrder = async (orderId: string, updates: Partial<AMCOrder>) => {
+    try {
+      const { error } = await supabase
+        .from('amc_responses')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('amc_form_id', orderId);
+
+      if (error) throw error;
+
+      toast.success('Order updated successfully');
+      fetchOrders();
+      setIsEditDrawerOpen(false);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update order');
+    }
+  };
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: orders.length };
+    orders.forEach(o => {
+      const status = o.status || 'new';
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [orders]);
+
   const filteredOrders = useMemo(() => {
-    let orders = mockOrders.filter(o => !o.unsubscribed);
+    let filtered = orders;
     if (selectedTab !== 'all') {
-      orders = orders.filter(o => o.status === selectedTab);
+      filtered = filtered.filter(o => (o.status || 'new') === selectedTab);
     }
-    // Technicians only see their assigned orders
-    if (user?.role === 'technician') {
-      orders = orders.filter(o => o.assigned_to === user.id);
-    }
-    return orders;
-  }, [selectedTab, user]);
+    return filtered;
+  }, [orders, selectedTab]);
+
+  const statusTabs = [
+    { value: 'all', label: 'All', count: statusCounts.all || 0 },
+    { value: 'new', label: 'New', count: statusCounts.new || 0 },
+    { value: 'pending', label: 'Pending', count: statusCounts.pending || 0 },
+    { value: 'in_progress', label: 'In Progress', count: statusCounts.in_progress || 0 },
+    { value: 'completed', label: 'Completed', count: statusCounts.completed || 0 },
+  ];
 
   const columns: Column<AMCOrder>[] = [
     {
@@ -90,22 +245,19 @@ export default function Orders() {
       key: 'status',
       header: 'Status',
       cell: (order) => (
-        <StatusBadge variant={order.status as any}>
-          {formatStatus(order.status)}
+        <StatusBadge variant={(order.status || 'new') as any}>
+          {formatStatus(order.status || 'new')}
         </StatusBadge>
       ),
     },
     {
       key: 'assigned_to',
       header: 'Assigned To',
-      cell: (order) => {
-        const staff = mockStaff.find(s => s.id === order.assigned_to);
-        return staff ? (
-          <span className="text-sm text-foreground">{staff.name}</span>
-        ) : (
-          <span className="text-sm text-muted-foreground italic">Unassigned</span>
-        );
-      },
+      cell: (order) => order.assigned_to_name ? (
+        <span className="text-sm text-foreground">{order.assigned_to_name}</span>
+      ) : (
+        <span className="text-sm text-muted-foreground italic">Unassigned</span>
+      ),
     },
     {
       key: 'created_at',
@@ -139,7 +291,10 @@ export default function Orders() {
             )}
             <DropdownMenuSeparator />
             {canEdit && (
-              <DropdownMenuItem className="text-destructive">
+              <DropdownMenuItem 
+                className="text-destructive"
+                onClick={() => handleUpdateOrder(order.amc_form_id, { unsubscribed: true })}
+              >
                 <UserMinus className="h-4 w-4 mr-2" />
                 Unsubscribe
               </DropdownMenuItem>
@@ -153,6 +308,7 @@ export default function Orders() {
 
   const handleView = (order: AMCOrder) => {
     setSelectedOrder(order);
+    fetchSystems(order.amc_form_id);
     setIsViewDrawerOpen(true);
   };
 
@@ -161,23 +317,23 @@ export default function Orders() {
     setIsEditDrawerOpen(true);
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">AMC Orders</h1>
           <p className="text-muted-foreground">Manage all annual maintenance contract orders</p>
         </div>
-        {canEdit && (
-          <Button className="gradient-primary text-white gap-2">
-            <Plus className="h-4 w-4" />
-            New Order
-          </Button>
-        )}
       </div>
 
-      {/* Tabs */}
       <Tabs value={selectedTab} onValueChange={setSelectedTab}>
         <TabsList className="bg-muted/50 p-1">
           {statusTabs.map(tab => (
@@ -203,57 +359,71 @@ export default function Orders() {
             searchPlaceholder="Search by customer name..."
             onRowClick={handleView}
             emptyMessage="No orders found"
-            actions={
-              <Button variant="outline" size="sm" className="gap-2">
-                <Filter className="h-4 w-4" />
-                Filters
-              </Button>
-            }
           />
         </TabsContent>
       </Tabs>
 
-      {/* View Drawer */}
       <DrawerPanel
         open={isViewDrawerOpen}
         onClose={() => setIsViewDrawerOpen(false)}
         title="Order Details"
-        subtitle={selectedOrder ? `AMC ID: ${selectedOrder.amc_form_id}` : ''}
+        subtitle={selectedOrder ? `AMC ID: ${selectedOrder.amc_form_id.slice(0, 8)}...` : ''}
         size="xl"
       >
-        {selectedOrder && <OrderDetails order={selectedOrder} />}
+        {selectedOrder && (
+          <OrderDetails 
+            order={selectedOrder} 
+            systems={systems[selectedOrder.amc_form_id] || []}
+          />
+        )}
       </DrawerPanel>
 
-      {/* Edit Drawer */}
       <DrawerPanel
         open={isEditDrawerOpen}
         onClose={() => setIsEditDrawerOpen(false)}
         title="Edit Order"
-        subtitle={selectedOrder ? `AMC ID: ${selectedOrder.amc_form_id}` : ''}
+        subtitle={selectedOrder ? `AMC ID: ${selectedOrder.amc_form_id.slice(0, 8)}...` : ''}
         size="lg"
         footer={
           <div className="flex justify-end gap-3">
             <Button variant="outline" onClick={() => setIsEditDrawerOpen(false)}>
               Cancel
             </Button>
-            <Button className="gradient-primary text-white">
+            <Button 
+              className="gradient-primary text-white"
+              onClick={() => {
+                if (selectedOrder) {
+                  const form = document.getElementById('edit-form') as HTMLFormElement;
+                  const formData = new FormData(form);
+                  handleUpdateOrder(selectedOrder.amc_form_id, {
+                    status: formData.get('status') as string,
+                    urgency_level: formData.get('urgency_level') as string,
+                    assigned_to: formData.get('assigned_to') as string || null,
+                    notes: formData.get('notes') as string,
+                    service_work_description: formData.get('service_work_description') as string,
+                  });
+                }
+              }}
+            >
               Save Changes
             </Button>
           </div>
         }
       >
-        {selectedOrder && <OrderEditForm order={selectedOrder} />}
+        {selectedOrder && (
+          <OrderEditForm 
+            order={selectedOrder} 
+            technicians={staffList}
+          />
+        )}
       </DrawerPanel>
     </div>
   );
 }
 
-function OrderDetails({ order }: { order: AMCOrder }) {
-  const assignedStaff = mockStaff.find(s => s.id === order.assigned_to);
-
+function OrderDetails({ order, systems }: { order: AMCOrder; systems: AMCSystem[] }) {
   return (
     <div className="space-y-6">
-      {/* Customer Info */}
       <div className="rounded-lg border bg-muted/30 p-4">
         <h4 className="font-semibold text-foreground mb-4">Customer Information</h4>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -285,12 +455,11 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </div>
       </div>
 
-      {/* Status & Assignment */}
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg border p-4">
           <p className="text-sm text-muted-foreground mb-1">Status</p>
-          <StatusBadge variant={order.status as any} size="lg">
-            {formatStatus(order.status)}
+          <StatusBadge variant={(order.status || 'new') as any} size="lg">
+            {formatStatus(order.status || 'new')}
           </StatusBadge>
         </div>
         <div className="rounded-lg border p-4">
@@ -305,13 +474,12 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </div>
         <div className="rounded-lg border p-4">
           <p className="text-sm text-muted-foreground mb-1">Assigned To</p>
-          <p className="font-medium">{assignedStaff?.name || 'Unassigned'}</p>
+          <p className="font-medium">{order.assigned_to_name || 'Unassigned'}</p>
         </div>
       </div>
 
       <Separator />
 
-      {/* Usage Pattern */}
       <div>
         <h4 className="font-semibold text-foreground mb-4 flex items-center gap-2">
           <Clock className="h-5 w-5" />
@@ -337,8 +505,7 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </div>
       </div>
 
-      {/* Systems */}
-      {order.systems && order.systems.length > 0 && (
+      {systems.length > 0 && (
         <>
           <Separator />
           <div>
@@ -347,7 +514,7 @@ function OrderDetails({ order }: { order: AMCOrder }) {
               Registered Systems
             </h4>
             <div className="space-y-3">
-              {order.systems.map(system => (
+              {systems.map(system => (
                 <div key={system.id} className="flex items-center justify-between rounded-lg border p-3">
                   <div>
                     <p className="font-medium">{system.device_name || 'Unknown Device'}</p>
@@ -363,7 +530,6 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </>
       )}
 
-      {/* Appointment */}
       {order.scheduled_date && (
         <>
           <Separator />
@@ -393,7 +559,6 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </>
       )}
 
-      {/* Problem Description */}
       {order.problem_description && (
         <>
           <Separator />
@@ -404,7 +569,6 @@ function OrderDetails({ order }: { order: AMCOrder }) {
         </>
       )}
 
-      {/* Notes */}
       {order.notes && (
         <div>
           <h4 className="font-semibold text-foreground mb-2">Internal Notes</h4>
@@ -415,15 +579,13 @@ function OrderDetails({ order }: { order: AMCOrder }) {
   );
 }
 
-function OrderEditForm({ order }: { order: AMCOrder }) {
-  const technicians = mockStaff.filter(s => s.role === 'technician' && s.active);
-
+function OrderEditForm({ order, technicians }: { order: AMCOrder; technicians: StaffMember[] }) {
   return (
-    <div className="space-y-6">
+    <form id="edit-form" className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label>Status</Label>
-          <Select defaultValue={order.status}>
+          <Select name="status" defaultValue={order.status || 'new'}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -439,7 +601,7 @@ function OrderEditForm({ order }: { order: AMCOrder }) {
 
         <div className="space-y-2">
           <Label>Urgency Level</Label>
-          <Select defaultValue={order.urgency_level || ''}>
+          <Select name="urgency_level" defaultValue={order.urgency_level || ''}>
             <SelectTrigger>
               <SelectValue placeholder="Select urgency" />
             </SelectTrigger>
@@ -455,14 +617,14 @@ function OrderEditForm({ order }: { order: AMCOrder }) {
 
       <div className="space-y-2">
         <Label>Assign Technician</Label>
-        <Select defaultValue={order.assigned_to || ''}>
+        <Select name="assigned_to" defaultValue={order.assigned_to || ''}>
           <SelectTrigger>
             <SelectValue placeholder="Select technician" />
           </SelectTrigger>
           <SelectContent>
             {technicians.map(tech => (
               <SelectItem key={tech.id} value={tech.id}>
-                {tech.name}
+                {tech.full_name}
               </SelectItem>
             ))}
           </SelectContent>
@@ -472,6 +634,7 @@ function OrderEditForm({ order }: { order: AMCOrder }) {
       <div className="space-y-2">
         <Label>Internal Notes</Label>
         <Textarea
+          name="notes"
           defaultValue={order.notes || ''}
           placeholder="Add internal notes about this order..."
           rows={4}
@@ -481,11 +644,12 @@ function OrderEditForm({ order }: { order: AMCOrder }) {
       <div className="space-y-2">
         <Label>Service Work Description</Label>
         <Textarea
+          name="service_work_description"
           defaultValue={order.service_work_description || ''}
           placeholder="Describe the work to be done..."
           rows={4}
         />
       </div>
-    </div>
+    </form>
   );
 }
