@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Clock, FileText, Image, MoreHorizontal, Eye, Edit, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, Clock, Image, MoreHorizontal, Eye, Edit, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, Column } from '@/components/ui/data-table';
@@ -15,51 +15,219 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { mockWorksheets, mockOrders, mockStaff } from '@/data/mockData';
-import { Worksheet, AMCOrder, WorkLog } from '@/types';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
+
+interface Worksheet {
+  id: string;
+  amc_order_id: string;
+  staff_id: string;
+  staff_name?: string;
+  customer_name?: string;
+  time_spent_minutes: number;
+  tasks_performed?: string;
+  issues_resolved?: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkLog {
+  id: string;
+  worksheet_id: string;
+  description: string;
+  log_type: string;
+  images?: string[];
+  created_at: string;
+}
+
+interface AssignedOrder {
+  amc_form_id: string;
+  full_name: string;
+  status: string;
+}
 
 export default function WorksheetsPage() {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
+  const [worksheets, setWorksheets] = useState<Worksheet[]>([]);
+  const [assignedOrders, setAssignedOrders] = useState<AssignedOrder[]>([]);
+  const [workLogs, setWorkLogs] = useState<WorkLog[]>([]);
   const [selectedTab, setSelectedTab] = useState('all');
   const [selectedWorksheet, setSelectedWorksheet] = useState<Worksheet | null>(null);
   const [isViewDrawerOpen, setIsViewDrawerOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const isTechnician = user?.role === 'technician';
   const isAdmin = user?.role === 'admin';
 
-  // Filter worksheets based on role
-  const worksheets = isTechnician
-    ? mockWorksheets.filter(w => w.staff_id === user.id)
-    : mockWorksheets;
+  useEffect(() => {
+    fetchWorksheets();
+    if (isTechnician) {
+      fetchAssignedOrders();
+    }
+  }, [isTechnician, session?.user?.id]);
+
+  const fetchWorksheets = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('worksheets')
+        .select(`
+          *,
+          profiles!worksheets_staff_id_fkey (full_name),
+          amc_responses!worksheets_amc_order_id_fkey (full_name)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const worksheetsWithNames = data?.map(w => ({
+        id: w.id,
+        amc_order_id: w.amc_order_id,
+        staff_id: w.staff_id,
+        staff_name: w.profiles?.full_name || 'Unknown',
+        customer_name: w.amc_responses?.full_name || 'Unknown',
+        time_spent_minutes: w.time_spent_minutes || 0,
+        tasks_performed: w.tasks_performed,
+        issues_resolved: w.issues_resolved,
+        status: w.status || 'draft',
+        created_at: w.created_at,
+        updated_at: w.updated_at,
+      })) || [];
+
+      setWorksheets(worksheetsWithNames);
+    } catch (error) {
+      console.error('Error fetching worksheets:', error);
+      toast.error('Failed to load worksheets');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchAssignedOrders = async () => {
+    if (!session?.user?.id) return;
+
+    try {
+      // First get the profile id for the current user
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (!profile) return;
+
+      const { data, error } = await supabase
+        .from('amc_responses')
+        .select('amc_form_id, full_name, status')
+        .eq('assigned_to', profile.id)
+        .not('status', 'eq', 'completed');
+
+      if (error) throw error;
+      setAssignedOrders(data || []);
+    } catch (error) {
+      console.error('Error fetching assigned orders:', error);
+    }
+  };
+
+  const fetchWorkLogs = async (worksheetId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('work_logs')
+        .select('*')
+        .eq('worksheet_id', worksheetId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      setWorkLogs(data || []);
+    } catch (error) {
+      console.error('Error fetching work logs:', error);
+    }
+  };
+
+  const handleCreateWorksheet = async (formData: FormData, status: 'draft' | 'submitted') => {
+    if (!session?.user?.id) return;
+
+    try {
+      // Get profile id
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (!profile) throw new Error('Profile not found');
+
+      const hours = parseInt(formData.get('hours') as string) || 0;
+      const minutes = parseInt(formData.get('minutes') as string) || 0;
+
+      const worksheetData = {
+        amc_order_id: formData.get('amc_order_id') as string,
+        staff_id: profile.id,
+        time_spent_minutes: hours * 60 + minutes,
+        tasks_performed: formData.get('tasks_performed') as string,
+        issues_resolved: formData.get('issues_resolved') as string,
+        status,
+      };
+
+      if (selectedWorksheet) {
+        const { error } = await supabase
+          .from('worksheets')
+          .update(worksheetData)
+          .eq('id', selectedWorksheet.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('worksheets')
+          .insert(worksheetData);
+
+        if (error) throw error;
+      }
+
+      toast.success(selectedWorksheet ? 'Worksheet updated' : 'Worksheet created');
+      setIsCreateDrawerOpen(false);
+      setSelectedWorksheet(null);
+      fetchWorksheets();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to save worksheet');
+    }
+  };
+
+  const handleApprove = async (worksheet: Worksheet) => {
+    try {
+      const { error } = await supabase
+        .from('worksheets')
+        .update({ status: 'approved' })
+        .eq('id', worksheet.id);
+
+      if (error) throw error;
+
+      toast.success('Worksheet approved');
+      fetchWorksheets();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to approve worksheet');
+    }
+  };
 
   const filteredWorksheets = selectedTab === 'all'
     ? worksheets
     : worksheets.filter(w => w.status === selectedTab);
 
-  // Get assigned orders for technician
-  const assignedOrders = isTechnician
-    ? mockOrders.filter(o => o.assigned_to === user?.id && o.status !== 'completed')
-    : mockOrders.filter(o => o.status !== 'completed');
-
   const columns: Column<Worksheet>[] = [
     {
       key: 'amc_order_id',
       header: 'Order',
-      cell: (worksheet) => {
-        const order = mockOrders.find(o => o.amc_form_id === worksheet.amc_order_id);
-        return (
-          <div>
-            <p className="font-medium">#{worksheet.amc_order_id}</p>
-            <p className="text-sm text-muted-foreground">{order?.full_name || 'Unknown'}</p>
-          </div>
-        );
-      },
+      cell: (worksheet) => (
+        <div>
+          <p className="font-medium">#{worksheet.amc_order_id.slice(0, 8)}...</p>
+          <p className="text-sm text-muted-foreground">{worksheet.customer_name}</p>
+        </div>
+      ),
     },
     {
       key: 'staff_name',
@@ -76,13 +244,6 @@ export default function WorksheetsPage() {
           <Clock className="h-4 w-4 text-muted-foreground" />
           <span>{Math.floor(worksheet.time_spent_minutes / 60)}h {worksheet.time_spent_minutes % 60}m</span>
         </div>
-      ),
-    },
-    {
-      key: 'work_logs',
-      header: 'Logs',
-      cell: (worksheet) => (
-        <span className="text-muted-foreground">{worksheet.work_logs.length} entries</span>
       ),
     },
     {
@@ -139,6 +300,7 @@ export default function WorksheetsPage() {
 
   const handleView = (worksheet: Worksheet) => {
     setSelectedWorksheet(worksheet);
+    fetchWorkLogs(worksheet.id);
     setIsViewDrawerOpen(true);
   };
 
@@ -147,18 +309,16 @@ export default function WorksheetsPage() {
     setIsCreateDrawerOpen(true);
   };
 
-  const handleApprove = (worksheet: Worksheet) => {
-    toast.success('Worksheet approved successfully!');
-  };
-
-  const handleCreateWorksheet = () => {
-    toast.success('Worksheet created successfully!');
-    setIsCreateDrawerOpen(false);
-  };
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Worksheets</h1>
@@ -180,7 +340,6 @@ export default function WorksheetsPage() {
         )}
       </div>
 
-      {/* Quick Stats for Technician */}
       {isTechnician && (
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl border bg-card p-4 shadow-card">
@@ -202,7 +361,6 @@ export default function WorksheetsPage() {
         </div>
       )}
 
-      {/* Tabs */}
       <Tabs value={selectedTab} onValueChange={setSelectedTab}>
         <TabsList className="bg-muted/50 p-1">
           <TabsTrigger value="all" className="data-[state=active]:bg-background data-[state=active]:shadow-sm">
@@ -232,18 +390,18 @@ export default function WorksheetsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* View Worksheet Drawer */}
       <DrawerPanel
         open={isViewDrawerOpen}
         onClose={() => setIsViewDrawerOpen(false)}
         title="Worksheet Details"
-        subtitle={selectedWorksheet ? `Order #${selectedWorksheet.amc_order_id}` : ''}
+        subtitle={selectedWorksheet ? `Order #${selectedWorksheet.amc_order_id.slice(0, 8)}...` : ''}
         size="xl"
       >
-        {selectedWorksheet && <WorksheetDetails worksheet={selectedWorksheet} />}
+        {selectedWorksheet && (
+          <WorksheetDetails worksheet={selectedWorksheet} workLogs={workLogs} />
+        )}
       </DrawerPanel>
 
-      {/* Create/Edit Worksheet Drawer */}
       <DrawerPanel
         open={isCreateDrawerOpen}
         onClose={() => setIsCreateDrawerOpen(false)}
@@ -255,10 +413,23 @@ export default function WorksheetsPage() {
             <Button variant="outline" className="flex-1" onClick={() => setIsCreateDrawerOpen(false)}>
               Cancel
             </Button>
-            <Button variant="outline" className="flex-1" onClick={handleCreateWorksheet}>
+            <Button 
+              variant="outline" 
+              className="flex-1" 
+              onClick={() => {
+                const form = document.getElementById('worksheet-form') as HTMLFormElement;
+                handleCreateWorksheet(new FormData(form), 'draft');
+              }}
+            >
               Save Draft
             </Button>
-            <Button className="flex-1 gradient-primary text-white" onClick={handleCreateWorksheet}>
+            <Button 
+              className="flex-1 gradient-primary text-white" 
+              onClick={() => {
+                const form = document.getElementById('worksheet-form') as HTMLFormElement;
+                handleCreateWorksheet(new FormData(form), 'submitted');
+              }}
+            >
               Submit
             </Button>
           </div>
@@ -273,12 +444,9 @@ export default function WorksheetsPage() {
   );
 }
 
-function WorksheetDetails({ worksheet }: { worksheet: Worksheet }) {
-  const order = mockOrders.find(o => o.amc_form_id === worksheet.amc_order_id);
-
+function WorksheetDetails({ worksheet, workLogs }: { worksheet: Worksheet; workLogs: WorkLog[] }) {
   return (
     <div className="space-y-6">
-      {/* Summary */}
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg border p-4">
           <p className="text-sm text-muted-foreground mb-1">Technician</p>
@@ -298,21 +466,18 @@ function WorksheetDetails({ worksheet }: { worksheet: Worksheet }) {
         </div>
       </div>
 
-      {/* Customer Info */}
-      {order && (
-        <div className="rounded-lg border p-4 bg-muted/30">
-          <h4 className="font-semibold mb-2">Customer</h4>
-          <p className="font-medium">{order.full_name}</p>
-          <p className="text-sm text-muted-foreground">{order.city}, {order.state}</p>
-        </div>
-      )}
+      <div className="rounded-lg border p-4 bg-muted/30">
+        <h4 className="font-semibold mb-2">Customer</h4>
+        <p className="font-medium">{worksheet.customer_name}</p>
+      </div>
 
-      {/* Tasks & Issues */}
       <div className="space-y-4">
-        <div className="rounded-lg border p-4">
-          <h4 className="font-semibold mb-2">Tasks Performed</h4>
-          <p className="text-muted-foreground">{worksheet.tasks_performed}</p>
-        </div>
+        {worksheet.tasks_performed && (
+          <div className="rounded-lg border p-4">
+            <h4 className="font-semibold mb-2">Tasks Performed</h4>
+            <p className="text-muted-foreground">{worksheet.tasks_performed}</p>
+          </div>
+        )}
         {worksheet.issues_resolved && (
           <div className="rounded-lg border p-4">
             <h4 className="font-semibold mb-2">Issues Resolved</h4>
@@ -321,70 +486,72 @@ function WorksheetDetails({ worksheet }: { worksheet: Worksheet }) {
         )}
       </div>
 
-      <Separator />
-
-      {/* Work Logs Timeline */}
-      <div>
-        <h4 className="font-semibold mb-4">Work Logs</h4>
-        <div className="space-y-4">
-          {worksheet.work_logs.map((log, index) => (
-            <div key={log.id} className="relative pl-6">
-              {index !== worksheet.work_logs.length - 1 && (
-                <div className="absolute left-[9px] top-6 h-full w-0.5 bg-border" />
-              )}
-              <div
-                className={cn(
-                  'absolute left-0 top-1.5 h-5 w-5 rounded-full border-2 flex items-center justify-center',
-                  log.type === 'progress' && 'border-info bg-info/10',
-                  log.type === 'issue' && 'border-warning bg-warning/10',
-                  log.type === 'resolution' && 'border-success bg-success/10',
-                  log.type === 'note' && 'border-muted-foreground bg-muted'
-                )}
-              >
-                <div
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    log.type === 'progress' && 'bg-info',
-                    log.type === 'issue' && 'bg-warning',
-                    log.type === 'resolution' && 'bg-success',
-                    log.type === 'note' && 'bg-muted-foreground'
+      {workLogs.length > 0 && (
+        <>
+          <Separator />
+          <div>
+            <h4 className="font-semibold mb-4">Work Logs</h4>
+            <div className="space-y-4">
+              {workLogs.map((log, index) => (
+                <div key={log.id} className="relative pl-6">
+                  {index !== workLogs.length - 1 && (
+                    <div className="absolute left-[9px] top-6 h-full w-0.5 bg-border" />
                   )}
-                />
-              </div>
-              <div className="rounded-lg border p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <StatusBadge
-                    variant={
-                      log.type === 'progress' ? 'in_progress' :
-                      log.type === 'issue' ? 'pending' :
-                      log.type === 'resolution' ? 'completed' : 'default'
-                    }
-                    size="sm"
+                  <div
+                    className={cn(
+                      'absolute left-0 top-1.5 h-5 w-5 rounded-full border-2 flex items-center justify-center',
+                      log.log_type === 'progress' && 'border-info bg-info/10',
+                      log.log_type === 'issue' && 'border-warning bg-warning/10',
+                      log.log_type === 'resolution' && 'border-success bg-success/10',
+                      log.log_type === 'note' && 'border-muted-foreground bg-muted'
+                    )}
                   >
-                    {formatStatus(log.type)}
-                  </StatusBadge>
-                  <span className="text-xs text-muted-foreground">
-                    {format(new Date(log.timestamp), 'MMM dd, HH:mm')}
-                  </span>
-                </div>
-                <p className="text-sm">{log.description}</p>
-                {log.images && log.images.length > 0 && (
-                  <div className="flex gap-2 mt-2">
-                    {log.images.map((img, i) => (
-                      <div
-                        key={i}
-                        className="h-16 w-16 rounded-md border bg-muted flex items-center justify-center"
-                      >
-                        <Image className="h-6 w-6 text-muted-foreground" />
-                      </div>
-                    ))}
+                    <div
+                      className={cn(
+                        'h-2 w-2 rounded-full',
+                        log.log_type === 'progress' && 'bg-info',
+                        log.log_type === 'issue' && 'bg-warning',
+                        log.log_type === 'resolution' && 'bg-success',
+                        log.log_type === 'note' && 'bg-muted-foreground'
+                      )}
+                    />
                   </div>
-                )}
-              </div>
+                  <div className="rounded-lg border p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <StatusBadge
+                        variant={
+                          log.log_type === 'progress' ? 'in_progress' :
+                          log.log_type === 'issue' ? 'pending' :
+                          log.log_type === 'resolution' ? 'completed' : 'default'
+                        }
+                        size="sm"
+                      >
+                        {formatStatus(log.log_type || 'note')}
+                      </StatusBadge>
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(log.created_at), 'MMM dd, HH:mm')}
+                      </span>
+                    </div>
+                    <p className="text-sm">{log.description}</p>
+                    {log.images && log.images.length > 0 && (
+                      <div className="flex gap-2 mt-2">
+                        {log.images.map((img, i) => (
+                          <div
+                            key={i}
+                            className="h-16 w-16 rounded-md border bg-muted flex items-center justify-center"
+                          >
+                            <Image className="h-6 w-6 text-muted-foreground" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -394,46 +561,31 @@ function WorksheetForm({
   assignedOrders,
 }: {
   worksheet: Worksheet | null;
-  assignedOrders: AMCOrder[];
+  assignedOrders: AssignedOrder[];
 }) {
-  const [logs, setLogs] = useState<Partial<WorkLog>[]>(worksheet?.work_logs || []);
-
-  const addLog = () => {
-    setLogs([
-      ...logs,
-      {
-        id: `temp-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        description: '',
-        type: 'progress',
-      },
-    ]);
-  };
-
   return (
-    <div className="space-y-6">
-      {/* Order Selection */}
+    <form id="worksheet-form" className="space-y-6">
       <div className="space-y-2">
         <Label>Select Order</Label>
-        <Select defaultValue={worksheet?.amc_order_id || ''}>
+        <Select name="amc_order_id" defaultValue={worksheet?.amc_order_id || ''}>
           <SelectTrigger>
             <SelectValue placeholder="Choose an assigned order" />
           </SelectTrigger>
           <SelectContent>
             {assignedOrders.map(order => (
               <SelectItem key={order.amc_form_id} value={order.amc_form_id}>
-                #{order.amc_form_id} - {order.full_name}
+                #{order.amc_form_id.slice(0, 8)}... - {order.full_name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
 
-      {/* Time Spent */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label>Hours</Label>
           <Input
+            name="hours"
             type="number"
             min="0"
             defaultValue={worksheet ? Math.floor(worksheet.time_spent_minutes / 60) : 0}
@@ -442,6 +594,7 @@ function WorksheetForm({
         <div className="space-y-2">
           <Label>Minutes</Label>
           <Input
+            name="minutes"
             type="number"
             min="0"
             max="59"
@@ -450,72 +603,25 @@ function WorksheetForm({
         </div>
       </div>
 
-      {/* Tasks Performed */}
       <div className="space-y-2">
         <Label>Tasks Performed</Label>
         <Textarea
+          name="tasks_performed"
           defaultValue={worksheet?.tasks_performed || ''}
           placeholder="Describe the tasks you performed..."
           rows={3}
         />
       </div>
 
-      {/* Issues Resolved */}
       <div className="space-y-2">
         <Label>Issues Resolved</Label>
         <Textarea
+          name="issues_resolved"
           defaultValue={worksheet?.issues_resolved || ''}
           placeholder="Describe any issues you resolved..."
           rows={3}
         />
       </div>
-
-      <Separator />
-
-      {/* Work Logs */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <Label>Work Logs</Label>
-          <Button variant="outline" size="sm" onClick={addLog}>
-            <Plus className="h-4 w-4 mr-1" />
-            Add Log
-          </Button>
-        </div>
-        <div className="space-y-4">
-          {logs.map((log, index) => (
-            <div key={log.id || index} className="rounded-lg border p-4 space-y-3">
-              <div className="flex gap-3">
-                <div className="flex-1 space-y-2">
-                  <Label>Type</Label>
-                  <Select defaultValue={log.type || 'progress'}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="progress">Progress</SelectItem>
-                      <SelectItem value="issue">Issue</SelectItem>
-                      <SelectItem value="resolution">Resolution</SelectItem>
-                      <SelectItem value="note">Note</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Description</Label>
-                <Textarea
-                  defaultValue={log.description}
-                  placeholder="Describe what you did..."
-                  rows={2}
-                />
-              </div>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Image className="h-4 w-4" />
-                Add Images
-              </Button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+    </form>
   );
 }
