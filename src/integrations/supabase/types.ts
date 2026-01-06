@@ -410,6 +410,7 @@ export type Database = {
           description: string
           id: string
           priority: string | null
+          resolved_worksheet_id: string | null
           status: string | null
           subject: string
           updated_at: string | null
@@ -422,6 +423,7 @@ export type Database = {
           description: string
           id?: string
           priority?: string | null
+          resolved_worksheet_id?: string | null
           status?: string | null
           subject: string
           updated_at?: string | null
@@ -434,6 +436,7 @@ export type Database = {
           description?: string
           id?: string
           priority?: string | null
+          resolved_worksheet_id?: string | null
           status?: string | null
           subject?: string
           updated_at?: string | null
@@ -451,6 +454,13 @@ export type Database = {
             columns: ["assigned_to"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_resolved_worksheet_id_fkey"
+            columns: ["resolved_worksheet_id"]
+            isOneToOne: false
+            referencedRelation: "worksheets"
             referencedColumns: ["id"]
           },
         ]
@@ -515,6 +525,7 @@ export type Database = {
           id: string
           images: string[] | null
           log_type: string | null
+          time_spent_minutes: number | null
           worksheet_id: string
         }
         Insert: {
@@ -523,6 +534,7 @@ export type Database = {
           id?: string
           images?: string[] | null
           log_type?: string | null
+          time_spent_minutes?: number | null
           worksheet_id: string
         }
         Update: {
@@ -531,6 +543,7 @@ export type Database = {
           id?: string
           images?: string[] | null
           log_type?: string | null
+          time_spent_minutes?: number | null
           worksheet_id?: string
         }
         Relationships: [
@@ -546,9 +559,12 @@ export type Database = {
       worksheets: {
         Row: {
           amc_order_id: string
+          approved_at: string | null
+          approved_by: string | null
           created_at: string | null
           id: string
           issues_resolved: string | null
+          requires_approval: boolean | null
           staff_id: string
           status: string | null
           tasks_performed: string | null
@@ -557,9 +573,12 @@ export type Database = {
         }
         Insert: {
           amc_order_id: string
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string | null
           id?: string
           issues_resolved?: string | null
+          requires_approval?: boolean | null
           staff_id: string
           status?: string | null
           tasks_performed?: string | null
@@ -568,9 +587,12 @@ export type Database = {
         }
         Update: {
           amc_order_id?: string
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string | null
           id?: string
           issues_resolved?: string | null
+          requires_approval?: boolean | null
           staff_id?: string
           status?: string | null
           tasks_performed?: string | null
@@ -584,6 +606,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "amc_responses"
             referencedColumns: ["amc_form_id"]
+          },
+          {
+            foreignKeyName: "worksheets_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "worksheets_staff_id_fkey"
