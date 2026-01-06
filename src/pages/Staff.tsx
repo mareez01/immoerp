@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Mail, Phone, MoreHorizontal, Eye, Edit, UserX } from 'lucide-react';
+import { Plus, Mail, Phone, MoreHorizontal, Eye, Edit, UserX, UserPlus, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,9 +13,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { Database } from '@/integrations/supabase/types';
+
+type AppRole = Database['public']['Enums']['app_role'];
 
 interface Staff {
   id: string;
@@ -25,12 +36,12 @@ interface Staff {
   phone?: string;
   department?: string;
   is_active: boolean;
-  role?: string;
+  role?: AppRole;
   assigned_orders_count?: number;
 }
 
 const departments = ['All', 'Management', 'Technical Support', 'Customer Support', 'Finance'];
-const roles = [
+const roles: { value: AppRole; label: string }[] = [
   { value: 'admin', label: 'Admin' },
   { value: 'technician', label: 'Technician' },
   { value: 'support', label: 'Customer Support' },
@@ -42,9 +53,18 @@ export default function StaffPage() {
   const [selectedDepartment, setSelectedDepartment] = useState('All');
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [isViewDrawerOpen, setIsViewDrawerOpen] = useState(false);
-  const [isAddDrawerOpen, setIsAddDrawerOpen] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // New staff form state
+  const [newStaffEmail, setNewStaffEmail] = useState('');
+  const [newStaffName, setNewStaffName] = useState('');
+  const [newStaffPhone, setNewStaffPhone] = useState('');
+  const [newStaffDepartment, setNewStaffDepartment] = useState('Technical Support');
+  const [newStaffRole, setNewStaffRole] = useState<AppRole>('technician');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
 
   useEffect(() => {
     fetchStaff();
@@ -91,7 +111,7 @@ export default function StaffPage() {
         phone: p.phone || undefined,
         department: p.department || 'General',
         is_active: p.is_active ?? true,
-        role: roleMap.get(p.user_id),
+        role: roleMap.get(p.user_id) as AppRole,
         assigned_orders_count: assignedCounts.get(p.id) || 0,
       })) || [];
 
@@ -104,12 +124,89 @@ export default function StaffPage() {
     }
   };
 
+  const handleCreateStaff = async () => {
+    if (!newStaffEmail || !newStaffName || !newStaffPassword) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    if (newStaffPassword.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+
+    setIsCreating(true);
+
+    try {
+      // Create user with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: newStaffEmail,
+        password: newStaffPassword,
+        options: {
+          data: {
+            full_name: newStaffName,
+          },
+        },
+      });
+
+      if (authError) throw authError;
+
+      if (!authData.user) {
+        throw new Error('Failed to create user');
+      }
+
+      // Update the profile with department and phone
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          phone: newStaffPhone || null,
+          department: newStaffDepartment,
+        })
+        .eq('user_id', authData.user.id);
+
+      if (profileError) {
+        console.error('Profile update error:', profileError);
+      }
+
+      // Assign role
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert({
+          user_id: authData.user.id,
+          role: newStaffRole,
+        });
+
+      if (roleError) throw roleError;
+
+      toast.success(`Staff member "${newStaffName}" created successfully`);
+      setIsAddDialogOpen(false);
+      resetForm();
+      fetchStaff();
+    } catch (error: any) {
+      console.error('Error creating staff:', error);
+      toast.error(error.message || 'Failed to create staff member');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const resetForm = () => {
+    setNewStaffEmail('');
+    setNewStaffName('');
+    setNewStaffPhone('');
+    setNewStaffDepartment('Technical Support');
+    setNewStaffRole('technician');
+    setNewStaffPassword('');
+  };
+
   const handleUpdateStaff = async (staffId: string, updates: Partial<Staff>) => {
     try {
       const { error } = await supabase
         .from('profiles')
         .update({ 
-          ...updates, 
+          full_name: updates.full_name,
+          phone: updates.phone,
+          department: updates.department,
           updated_at: new Date().toISOString() 
         })
         .eq('id', staffId);
@@ -121,6 +218,25 @@ export default function StaffPage() {
       setIsEditDrawerOpen(false);
     } catch (error: any) {
       toast.error(error.message || 'Failed to update staff');
+    }
+  };
+
+  const handleUpdateRole = async (staff: Staff, newRole: AppRole) => {
+    if (!staff.user_id) return;
+
+    try {
+      // Update existing role
+      const { error } = await supabase
+        .from('user_roles')
+        .update({ role: newRole })
+        .eq('user_id', staff.user_id);
+
+      if (error) throw error;
+
+      toast.success(`Role updated to ${newRole}`);
+      fetchStaff();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update role');
     }
   };
 
@@ -169,6 +285,39 @@ export default function StaffPage() {
           <h1 className="text-2xl font-bold text-foreground">Staff Management</h1>
           <p className="text-muted-foreground">Manage your team members and their roles</p>
         </div>
+        <Button 
+          className="gradient-primary text-white gap-2"
+          onClick={() => setIsAddDialogOpen(true)}
+        >
+          <UserPlus className="h-4 w-4" />
+          Add Staff
+        </Button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid gap-4 sm:grid-cols-4">
+        <div className="rounded-xl border bg-card p-4 shadow-card">
+          <p className="text-sm text-muted-foreground">Total Staff</p>
+          <p className="text-2xl font-bold text-foreground mt-1">{staffList.length}</p>
+        </div>
+        <div className="rounded-xl border bg-card p-4 shadow-card">
+          <p className="text-sm text-muted-foreground">Active</p>
+          <p className="text-2xl font-bold text-success mt-1">
+            {staffList.filter(s => s.is_active).length}
+          </p>
+        </div>
+        <div className="rounded-xl border bg-card p-4 shadow-card">
+          <p className="text-sm text-muted-foreground">Technicians</p>
+          <p className="text-2xl font-bold text-info mt-1">
+            {staffList.filter(s => s.role === 'technician').length}
+          </p>
+        </div>
+        <div className="rounded-xl border bg-card p-4 shadow-card">
+          <p className="text-sm text-muted-foreground">Admins</p>
+          <p className="text-2xl font-bold text-primary mt-1">
+            {staffList.filter(s => s.role === 'admin').length}
+          </p>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -188,8 +337,11 @@ export default function StaffPage() {
       </div>
 
       {filteredStaff.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          No staff members found
+        <div className="text-center py-12">
+          <UserPlus className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+          <h3 className="font-semibold text-lg mb-2">No Staff Members</h3>
+          <p className="text-muted-foreground mb-4">Add your first staff member to get started.</p>
+          <Button onClick={() => setIsAddDialogOpen(true)}>Add Staff</Button>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -241,7 +393,7 @@ export default function StaffPage() {
               <div className="mt-4 space-y-2">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Mail className="h-4 w-4" />
-                  <span>{staff.email}</span>
+                  <span className="truncate">{staff.email}</span>
                 </div>
                 {staff.phone && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -271,6 +423,101 @@ export default function StaffPage() {
         </div>
       )}
 
+      {/* Add Staff Dialog */}
+      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5" />
+              Add Staff Member
+            </DialogTitle>
+            <DialogDescription>
+              Create a new staff account with assigned role
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Full Name *</Label>
+              <Input
+                value={newStaffName}
+                onChange={(e) => setNewStaffName(e.target.value)}
+                placeholder="Enter full name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Email *</Label>
+              <Input
+                type="email"
+                value={newStaffEmail}
+                onChange={(e) => setNewStaffEmail(e.target.value)}
+                placeholder="staff@company.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Password *</Label>
+              <Input
+                type="password"
+                value={newStaffPassword}
+                onChange={(e) => setNewStaffPassword(e.target.value)}
+                placeholder="Minimum 6 characters"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input
+                value={newStaffPhone}
+                onChange={(e) => setNewStaffPhone(e.target.value)}
+                placeholder="+91 9876543210"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Department</Label>
+                <Select value={newStaffDepartment} onValueChange={setNewStaffDepartment}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {departments.filter(d => d !== 'All').map(dept => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Role *</Label>
+                <Select value={newStaffRole} onValueChange={(v) => setNewStaffRole(v as AppRole)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {roles.map(role => (
+                      <SelectItem key={role.value} value={role.value}>
+                        {role.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              className="gradient-primary text-white"
+              onClick={handleCreateStaff}
+              disabled={isCreating}
+            >
+              {isCreating ? 'Creating...' : 'Create Staff'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <DrawerPanel
         open={isViewDrawerOpen}
         onClose={() => setIsViewDrawerOpen(false)}
@@ -278,7 +525,7 @@ export default function StaffPage() {
         subtitle={selectedStaff?.email}
         size="md"
       >
-        {selectedStaff && <StaffDetails staff={selectedStaff} />}
+        {selectedStaff && <StaffDetails staff={selectedStaff} onUpdateRole={handleUpdateRole} />}
       </DrawerPanel>
 
       <DrawerPanel
@@ -355,7 +602,7 @@ function StaffForm({ staff }: { staff?: Staff }) {
   );
 }
 
-function StaffDetails({ staff }: { staff: Staff }) {
+function StaffDetails({ staff, onUpdateRole }: { staff: Staff; onUpdateRole: (staff: Staff, role: AppRole) => void }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -386,6 +633,30 @@ function StaffDetails({ staff }: { staff: Staff }) {
           <p className="text-sm text-muted-foreground mb-1">Department</p>
           <p className="font-medium">{staff.department}</p>
         </div>
+
+        {/* Role Management */}
+        <div className="rounded-lg border p-4 bg-muted/30">
+          <div className="flex items-center gap-2 mb-3">
+            <Shield className="h-4 w-4 text-primary" />
+            <p className="text-sm font-medium">Role Management</p>
+          </div>
+          <Select 
+            value={staff.role} 
+            onValueChange={(value) => onUpdateRole(staff, value as AppRole)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {roles.map(role => (
+                <SelectItem key={role.value} value={role.value}>
+                  {role.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         {staff.role === 'technician' && (
           <div className="rounded-lg border p-4">
             <p className="text-sm text-muted-foreground mb-1">Assigned Orders</p>
