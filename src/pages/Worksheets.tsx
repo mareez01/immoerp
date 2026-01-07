@@ -15,12 +15,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface Worksheet {
   id: string;
@@ -38,6 +47,9 @@ interface Worksheet {
   tasks_performed?: string;
   issues_resolved?: string;
   status: string;
+  requires_approval: boolean;
+  approved_by?: string;
+  approved_at?: string;
   created_at: string;
   updated_at: string;
   systems_count?: number;
@@ -48,6 +60,7 @@ interface WorkLog {
   worksheet_id: string;
   description: string;
   log_type: string;
+  time_spent_minutes: number;
   time_spent_minutes: number;
   images?: string[];
   created_at: string;
@@ -193,6 +206,18 @@ export default function WorksheetsPage() {
 
       if (error) throw error;
 
+      // Get systems count for each order
+      const orderIds = data?.map(w => w.amc_order_id) || [];
+      const { data: systems } = await supabase
+        .from('amc_systems')
+        .select('amc_form_id')
+        .in('amc_form_id', orderIds);
+
+      const systemsCountMap = new Map<string, number>();
+      systems?.forEach(s => {
+        systemsCountMap.set(s.amc_form_id, (systemsCountMap.get(s.amc_form_id) || 0) + 1);
+      });
+
       const worksheetsWithDetails = await Promise.all(
         (data || []).map(async (w) => {
           // Get systems count for this order
@@ -237,7 +262,6 @@ export default function WorksheetsPage() {
     if (!session?.user?.id) return;
 
     try {
-      // First get the profile id for the current user
       const { data: profile } = await supabase
         .from('profiles')
         .select('id')
@@ -316,6 +340,90 @@ export default function WorksheetsPage() {
     } catch (error) {
       console.error('Error fetching work logs:', error);
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    // Limit to 5 images
+    const newFiles = files.slice(0, 5 - uploadedImages.length);
+    setUploadedImages(prev => [...prev, ...newFiles]);
+
+    // Create previews
+    newFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreviews(prev => [...prev, reader.result as string]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removeImage = (index: number) => {
+    setUploadedImages(prev => prev.filter((_, i) => i !== index));
+    setImagePreviews(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const compressImage = async (file: File): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = document.createElement('img');
+      
+      img.onload = () => {
+        // Max dimensions
+        const maxWidth = 1200;
+        const maxHeight = 1200;
+        let { width, height } = img;
+        
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width *= ratio;
+          height *= ratio;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        canvas.toBlob((blob) => {
+          resolve(blob || file);
+        }, 'image/jpeg', 0.7);
+      };
+      
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  const uploadImages = async (worksheetId: string): Promise<string[]> => {
+    const urls: string[] = [];
+    
+    for (const file of uploadedImages) {
+      try {
+        const compressed = await compressImage(file);
+        const fileName = `${worksheetId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+        
+        const { error: uploadError } = await supabase.storage
+          .from('worksheet-images')
+          .upload(fileName, compressed, {
+            contentType: 'image/jpeg',
+            upsert: false,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('worksheet-images')
+          .getPublicUrl(fileName);
+
+        urls.push(urlData.publicUrl);
+      } catch (error) {
+        console.error('Error uploading image:', error);
+      }
+    }
+    
+    return urls;
   };
 
   const searchOrders = async (query: string) => {
@@ -406,10 +514,12 @@ export default function WorksheetsPage() {
 
       let worksheetId: string;
 
+      let worksheetId: string;
+
       if (selectedWorksheet) {
         const { error } = await supabase
           .from('worksheets')
-          .update(worksheetData)
+          .update({ ...worksheetData, updated_at: new Date().toISOString() })
           .eq('id', selectedWorksheet.id);
 
         if (error) throw error;
@@ -426,6 +536,9 @@ export default function WorksheetsPage() {
       } else {
         const { data: newWorksheet, error } = await supabase
           .from('worksheets')
+          .insert(worksheetData)
+          .select('id')
+          .single();
           .insert(worksheetData)
           .select('id')
           .single();
@@ -552,10 +665,23 @@ export default function WorksheetsPage() {
   };
 
   const handleApprove = async (worksheet: Worksheet) => {
+    if (!session?.user?.id) return;
+
     try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .single();
+
       const { error } = await supabase
         .from('worksheets')
-        .update({ status: 'approved' })
+        .update({
+          status: 'approved',
+          requires_approval: false,
+          approved_by: profile?.id,
+          approved_at: new Date().toISOString(),
+        })
         .eq('id', worksheet.id);
 
       if (error) throw error;
@@ -590,7 +716,11 @@ export default function WorksheetsPage() {
 
   const filteredWorksheets = selectedTab === 'all'
     ? worksheets
+    : selectedTab === 'pending_approval'
+    ? worksheets.filter(w => w.requires_approval && w.status === 'submitted')
     : worksheets.filter(w => w.status === selectedTab);
+
+  const pendingApprovalCount = worksheets.filter(w => w.requires_approval && w.status === 'submitted').length;
 
   const columns: Column<Worksheet>[] = [
     {
@@ -859,8 +989,8 @@ export default function WorksheetsPage() {
             data={filteredWorksheets}
             columns={columns}
             searchable
-            searchKey="staff_name"
-            searchPlaceholder="Search worksheets..."
+            searchKey="customer_name"
+            searchPlaceholder="Search by customer..."
             onRowClick={handleView}
             emptyMessage="No worksheets found"
           />
@@ -941,12 +1071,49 @@ export default function WorksheetsPage() {
         title="Worksheet Details"
         subtitle={selectedWorksheet ? `Order #${selectedWorksheet.amc_order_id.slice(0, 8)}... - ${selectedWorksheet.customer_name}` : ''}
         size="xl"
+        footer={
+          selectedWorksheet && (isTechnician || isAdmin) && selectedWorksheet.status !== 'approved' && (
+            <div className="flex gap-3">
+              {isTechnician && (
+                <Button
+                  className="flex-1 gradient-primary text-white"
+                  onClick={() => {
+                    resetLogForm();
+                    setIsAddLogDialogOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Work Log
+                </Button>
+              )}
+              {isAdmin && selectedWorksheet.requires_approval && (
+                <>
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => handleReject(selectedWorksheet)}
+                  >
+                    Request Revision
+                  </Button>
+                  <Button
+                    className="flex-1 bg-success hover:bg-success/90 text-white"
+                    onClick={() => handleApprove(selectedWorksheet)}
+                  >
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Approve
+                  </Button>
+                </>
+              )}
+            </div>
+          )
+        }
       >
         {selectedWorksheet && (
           <WorksheetDetails worksheet={selectedWorksheet} workLogs={workLogs} onAddLog={() => setIsAddLogDrawerOpen(true)} />
         )}
       </DrawerPanel>
 
+      {/* Create/Edit Worksheet Drawer */}
       <DrawerPanel
         open={isCreateDrawerOpen}
         onClose={() => {
@@ -973,6 +1140,7 @@ export default function WorksheetsPage() {
             <Button 
               variant="outline" 
               className="flex-1" 
+              disabled={isSubmitting}
               onClick={() => {
                 const form = document.getElementById('worksheet-form') as HTMLFormElement;
                 handleSaveWorksheet(new FormData(form), 'draft');
@@ -982,6 +1150,7 @@ export default function WorksheetsPage() {
             </Button>
             <Button 
               className="flex-1 gradient-primary text-white" 
+              disabled={isSubmitting}
               onClick={() => {
                 const form = document.getElementById('worksheet-form') as HTMLFormElement;
                 handleSaveWorksheet(new FormData(form), 'submitted');
@@ -1025,6 +1194,126 @@ export default function WorksheetsPage() {
       >
         <LogEntryForm />
       </DrawerPanel>
+
+      {/* Add Work Log Dialog */}
+      <Dialog open={isAddLogDialogOpen} onOpenChange={setIsAddLogDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Work Log Entry</DialogTitle>
+            <DialogDescription>
+              Log your work progress with time spent and proof images
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Log Type</Label>
+              <Select value={logType} onValueChange={setLogType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="progress">Progress Update</SelectItem>
+                  <SelectItem value="issue">Issue Found</SelectItem>
+                  <SelectItem value="resolution">Issue Resolved</SelectItem>
+                  <SelectItem value="note">General Note</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Time Spent</Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={logTimeHours}
+                    onChange={(e) => setLogTimeHours(parseInt(e.target.value) || 0)}
+                    placeholder="Hours"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Hours</p>
+                </div>
+                <div>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={logTimeMinutes}
+                    onChange={(e) => setLogTimeMinutes(parseInt(e.target.value) || 0)}
+                    placeholder="Minutes"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Minutes</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Current total: {Math.floor((selectedWorksheet?.time_spent_minutes || 0) / 60)}h {(selectedWorksheet?.time_spent_minutes || 0) % 60}m
+                → New total: {Math.floor(((selectedWorksheet?.time_spent_minutes || 0) + logTimeHours * 60 + logTimeMinutes) / 60)}h {((selectedWorksheet?.time_spent_minutes || 0) + logTimeHours * 60 + logTimeMinutes) % 60}m
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Description *</Label>
+              <Textarea
+                value={logDescription}
+                onChange={(e) => setLogDescription(e.target.value)}
+                placeholder="Describe the work done..."
+                rows={3}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Work Proof Images (Optional)</Label>
+              <div className="flex flex-wrap gap-2">
+                {imagePreviews.map((preview, index) => (
+                  <div key={index} className="relative h-20 w-20 rounded-lg border overflow-hidden">
+                    <img src={preview} alt="" className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(index)}
+                      className="absolute top-1 right-1 h-5 w-5 rounded-full bg-destructive text-white flex items-center justify-center"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                {uploadedImages.length < 5 && (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-20 w-20 rounded-lg border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center gap-1 hover:border-primary transition-colors"
+                  >
+                    <Upload className="h-5 w-5 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">Upload</span>
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Max 5 images, automatically compressed</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddLogDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="gradient-primary text-white"
+              onClick={handleAddWorkLog}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? 'Adding...' : 'Add Log Entry'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hidden file input for dialog */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleFileSelect}
+      />
     </div>
   );
 }
@@ -1434,6 +1723,32 @@ function WorksheetForm({
         )}
       </div>
 
+      {selectedOrder && (
+        <div className="rounded-lg border p-4 bg-muted/30">
+          <h4 className="font-semibold mb-2">Order Details</h4>
+          <div className="grid gap-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Customer:</span>
+              <span>{selectedOrder.full_name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Phone:</span>
+              <span>{selectedOrder.phone}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Location:</span>
+              <span>{selectedOrder.city}, {selectedOrder.state}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Status:</span>
+              <StatusBadge variant={selectedOrder.status as any} size="sm">
+                {formatStatus(selectedOrder.status)}
+              </StatusBadge>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label>Hours Worked</Label>
@@ -1457,6 +1772,17 @@ function WorksheetForm({
           />
         </div>
       </div>
+
+      {!worksheet && (
+        <div className="space-y-2">
+          <Label>Initial Work Description</Label>
+          <Textarea
+            name="initial_description"
+            placeholder="Describe the initial work or inspection..."
+            rows={3}
+          />
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label>Tasks Performed</Label>
