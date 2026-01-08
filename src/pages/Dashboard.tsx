@@ -16,6 +16,7 @@ interface DashboardStats {
   pending_invoices: number;
   total_revenue: number;
   open_tickets: number;
+  total_logged_minutes: number;
   orders_by_status: Record<string, number>;
   monthly_revenue: { month: string; revenue: number }[];
   expiring_subscriptions: number;
@@ -37,7 +38,7 @@ export default function Dashboard() {
       // Fetch orders
       const { data: orders, error: ordersError } = await supabase
         .from('amc_responses')
-        .select('amc_form_id, status, amc_started, assigned_to, created_at')
+        .select('amc_form_id, status, assigned_to, created_at')
         .eq('unsubscribed', false);
 
       if (ordersError) throw ordersError;
@@ -52,22 +53,47 @@ export default function Dashboard() {
       // Fetch support tickets
       const { data: tickets, error: ticketsError } = await supabase
         .from('support_tickets')
-        .select('id, status');
+        .select('id, status, assigned_to');
 
       if (ticketsError) throw ticketsError;
 
+      // Fetch worksheets for total time
+      let worksheetsQuery = supabase.from('worksheets').select('time_spent_minutes, staff_id');
+      
+      // Filter for technician
+      if (user?.role === 'technician' && user.profile_id) {
+        worksheetsQuery = worksheetsQuery.eq('staff_id', user.profile_id);
+      }
+
+      const { data: worksheets, error: worksheetsError } = await worksheetsQuery;
+
+      if (worksheetsError) throw worksheetsError;
+
       // Calculate stats
-      const total_orders = orders?.length || 0;
+      const total_orders = user?.role === 'technician' 
+        ? orders?.filter(o => o.assigned_to === user.profile_id).length || 0
+        : orders?.length || 0;
+        
       const active_subscriptions = invoices?.filter(i => 
         i.status === 'paid' && i.validity_end && new Date(i.validity_end) > new Date()
       ).length || 0;
+
       const pending_invoices = invoices?.filter(i => i.status !== 'paid' && i.status !== 'cancelled').length || 0;
       const total_revenue = invoices?.filter(i => i.status === 'paid').reduce((sum, i) => sum + Number(i.amount), 0) || 0;
-      const open_tickets = tickets?.filter(t => t.status === 'open' || t.status === 'in_progress').length || 0;
+      
+      const open_tickets = user?.role === 'technician'
+        ? tickets?.filter(t => (t.status === 'open' || t.status === 'in_progress') && t.assigned_to === user.profile_id).length || 0
+        : tickets?.filter(t => t.status === 'open' || t.status === 'in_progress').length || 0;
+        
+      const total_logged_minutes = worksheets?.reduce((sum, w) => sum + (w.time_spent_minutes || 0), 0) || 0;
 
       // Orders by status
       const orders_by_status: Record<string, number> = {};
-      orders?.forEach(order => {
+      const relevantOrders = user?.role === 'technician' 
+        ? orders?.filter(o => o.assigned_to === user.profile_id)
+        : orders;
+        
+      relevantOrders?.forEach(order => {
         const status = order.status || 'new';
         orders_by_status[status] = (orders_by_status[status] || 0) + 1;
       });
@@ -113,6 +139,7 @@ export default function Dashboard() {
         pending_invoices,
         total_revenue,
         open_tickets,
+        total_logged_minutes,
         orders_by_status,
         monthly_revenue,
         expiring_subscriptions,
@@ -159,12 +186,18 @@ export default function Dashboard() {
         <p className="text-muted-foreground">Welcome back, {user?.name}! Here's an overview of your AMC operations.</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <StatCard title="Total Orders" value={stats.total_orders} icon={ClipboardList} />
         <StatCard title="Active Subscriptions" value={stats.active_subscriptions} icon={Users} />
         <StatCard title="Pending Invoices" value={stats.pending_invoices} icon={CreditCard} iconClassName="bg-warning/10" />
         <StatCard title="Open Tickets" value={stats.open_tickets} icon={MessageSquare} iconClassName="bg-info/10" />
         <StatCard title="Total Revenue" value={`₹${(stats.total_revenue / 1000).toFixed(0)}K`} icon={IndianRupee} iconClassName="bg-success/10" />
+        <StatCard 
+          title="Service Time" 
+          value={`${Math.floor(stats.total_logged_minutes / 60)}h ${stats.total_logged_minutes % 60}m`} 
+          icon={Clock} 
+          iconClassName="bg-secondary/10" 
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

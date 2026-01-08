@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Clock, Image, MoreHorizontal, Eye, Edit, CheckCircle, FileText, Camera, MessageCircle, Search, Building, Phone, Mail, MapPin, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Plus, Clock, Image as ImageIcon, MoreHorizontal, Eye, Edit, CheckCircle, FileText, Camera, MessageCircle, Search, Building, Phone, Mail, MapPin, AlertCircle, X, Upload, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataTable, Column } from '@/components/ui/data-table';
@@ -27,13 +27,81 @@ import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, formatAmcId } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useWorksheetNotifications } from '@/hooks/use-realtime';
+
+// Utility function to compress images
+const compressImage = (file: File, maxWidth = 1024, quality = 0.8): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    const img = new window.Image();
+    
+    img.onload = () => {
+      const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
+      canvas.width = img.width * ratio;
+      canvas.height = img.height * ratio;
+      
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Canvas toBlob failed'));
+      }, 'image/jpeg', quality);
+    };
+
+    img.onerror = () => {
+      reject(new Error('Failed to load image for compression'));
+    };
+    
+    img.src = URL.createObjectURL(file);
+  });
+};
+
+// Upload images to Supabase storage
+const uploadImages = async (files: FileList | File[]): Promise<string[]> => {
+  const uploadPromises = Array.from(files).map(async (file) => {
+    try {
+      // Compress image
+      const compressedBlob = await compressImage(file);
+      const compressedFile = new File([compressedBlob], file.name, {
+        type: 'image/jpeg',
+        lastModified: Date.now(),
+      });
+
+      // Generate unique filename
+      const fileExt = 'jpg';
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `worksheet-images/${fileName}`;
+
+      // Upload to Supabase storage
+      const { data, error } = await supabase.storage
+        .from('worksheets')
+        .upload(filePath, compressedFile);
+
+      if (error) throw error;
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('worksheets')
+        .getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      throw error;
+    }
+  });
+
+  return Promise.all(uploadPromises);
+};
 
 interface Worksheet {
   id: string;
   amc_order_id: string;
+  amc_form_id: string; // Added for clarity
+  amc_number?: string;
   staff_id: string;
   staff_name?: string;
   customer_name?: string;
@@ -47,12 +115,9 @@ interface Worksheet {
   tasks_performed?: string;
   issues_resolved?: string;
   status: string;
-  requires_approval: boolean;
-  approved_by?: string;
-  approved_at?: string;
   created_at: string;
   updated_at: string;
-  systems_count?: number;
+  systems_count: number;
 }
 
 interface WorkLog {
@@ -61,8 +126,10 @@ interface WorkLog {
   description: string;
   log_type: string;
   time_spent_minutes: number;
-  time_spent_minutes: number;
   images?: string[];
+  status?: 'pending' | 'approved' | 'rejected';
+  is_internal?: boolean;
+  internal_notes?: string;
   created_at: string;
 }
 
@@ -75,6 +142,7 @@ interface SystemInfo {
 
 interface AmcOrderDetail {
   amc_form_id: string;
+  amc_number?: string;
   full_name: string;
   email: string;
   phone: string;
@@ -83,6 +151,11 @@ interface AmcOrderDetail {
   state: string;
   district: string;
   problem_description?: string;
+  service_work_description?: string;
+  internal_notes?: string;
+  remote_software_preference?: string;
+  preferred_lang?: string;
+  consent_remote_access?: boolean;
   urgency_level?: string;
   status: string;
   created_at: string;
@@ -107,6 +180,53 @@ export default function WorksheetsPage() {
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
   const [totalTimeSpent, setTotalTimeSpent] = useState(0);
+  const [uploadedImages, setUploadedImages] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAddLogDialogOpen, setIsAddLogDialogOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState('');
+
+  // Real-time worksheet notifications
+  const fetchWorksheetsCallback = useCallback(() => {
+    fetchWorksheets();
+  }, []);
+
+  useWorksheetNotifications({
+    onNewWorksheet: fetchWorksheetsCallback,
+    onWorksheetUpdate: fetchWorksheetsCallback,
+    onNewWorkLog: (log) => {
+      if (selectedWorksheet && log.worksheet_id === selectedWorksheet.id) {
+        fetchWorkLogs(selectedWorksheet.id);
+      }
+    },
+  });
+
+  const handleWorksheetFileUpload = async (files: FileList) => {
+    if (files.length === 0) return;
+    try {
+      setIsUploadingImages(true);
+      const urls = await uploadImages(files);
+      setUploadedImageUrls(prev => [...prev, ...urls]);
+    } catch (error) {
+      console.error('Upload failed:', error);
+      toast.error('Failed to upload images');
+    } finally {
+      setIsUploadingImages(false);
+    }
+  };
+
+  const removeUploadedImageUrl = (index: number) => {
+    setUploadedImageUrls(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const [logType, setLogType] = useState('progress');
+  const [logTimeHours, setLogTimeHours] = useState(0);
+  const [logTimeMinutes, setLogTimeMinutes] = useState(15);
+  const [logDescription, setLogDescription] = useState('');
+  const [isInternalLog, setIsInternalLog] = useState(false);
+  const [internalNotes, setInternalNotes] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isTechnician = user?.role === 'technician';
   const isAdmin = user?.role === 'admin';
@@ -118,64 +238,6 @@ export default function WorksheetsPage() {
     }
   }, [isTechnician, session?.user?.id]);
 
-  // Utility function to compress images
-  const compressImage = (file: File, maxWidth = 1024, quality = 0.8): Promise<Blob> => {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
-      const img = new HTMLImageElement();
-      
-      img.onload = () => {
-        const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
-        canvas.width = img.width * ratio;
-        canvas.height = img.height * ratio;
-        
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(resolve, 'image/jpeg', quality);
-      };
-      
-      img.src = URL.createObjectURL(file);
-    });
-  };
-
-  // Upload images to Supabase storage
-  const uploadImages = async (files: FileList): Promise<string[]> => {
-    const uploadPromises = Array.from(files).map(async (file) => {
-      try {
-        // Compress image
-        const compressedBlob = await compressImage(file);
-        const compressedFile = new File([compressedBlob], file.name, {
-          type: 'image/jpeg',
-          lastModified: Date.now(),
-        });
-
-        // Generate unique filename
-        const fileExt = 'jpg';
-        const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const filePath = `worksheet-images/${fileName}`;
-
-        // Upload to Supabase storage
-        const { data, error } = await supabase.storage
-          .from('worksheets')
-          .upload(filePath, compressedFile);
-
-        if (error) throw error;
-
-        // Get public URL
-        const { data: { publicUrl } } = supabase.storage
-          .from('worksheets')
-          .getPublicUrl(filePath);
-
-        return publicUrl;
-      } catch (error) {
-        console.error('Error uploading image:', error);
-        throw error;
-      }
-    });
-
-    return Promise.all(uploadPromises);
-  };
-
   // Calculate total time spent on an order
   const calculateTotalTimeSpent = (logs: WorkLog[], worksheetTime: number = 0): number => {
     const logTime = logs.reduce((total, log) => total + (log.time_spent_minutes || 0), 0);
@@ -184,12 +246,14 @@ export default function WorksheetsPage() {
 
   const fetchWorksheets = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('worksheets')
         .select(`
           *,
-          profiles!worksheets_staff_id_fkey (full_name),
-          amc_responses!worksheets_amc_order_id_fkey (
+          staff:profiles!worksheets_staff_id_fkey (full_name),
+          order:amc_responses!worksheets_amc_order_id_fkey (
+            amc_form_id,
+            amc_number,
             full_name,
             email,
             phone,
@@ -201,53 +265,58 @@ export default function WorksheetsPage() {
             urgency_level,
             system_usage_purpose
           )
-        `)
-        .order('created_at', { ascending: false });
+        `);
+
+      // Filter for technician
+      if (isTechnician && user?.profile_id) {
+        query = query.eq('staff_id', user.profile_id);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      // Get systems count for each order
-      const orderIds = data?.map(w => w.amc_order_id) || [];
+      // Use amc_form_id for system count - cast data to any to handle schema type mismatches
+      const worksheetData = data as any[];
+      const formIds = worksheetData?.map(w => w.order?.amc_form_id).filter(Boolean) || [];
       const { data: systems } = await supabase
         .from('amc_systems')
         .select('amc_form_id')
-        .in('amc_form_id', orderIds);
+        .in('amc_form_id', formIds);
 
       const systemsCountMap = new Map<string, number>();
       systems?.forEach(s => {
         systemsCountMap.set(s.amc_form_id, (systemsCountMap.get(s.amc_form_id) || 0) + 1);
       });
 
-      const worksheetsWithDetails = await Promise.all(
-        (data || []).map(async (w) => {
-          // Get systems count for this order
-          const { data: systems } = await supabase
-            .from('amc_systems')
-            .select('id')
-            .eq('amc_form_id', w.amc_order_id);
+      const worksheetsWithDetails = (data || []).map((w: any) => {
+        // Handle cases where join results might be arrays or using aliases
+        const profile = Array.isArray(w.staff) ? w.staff[0] : w.staff;
+        const response = Array.isArray(w.order) ? w.order[0] : w.order;
 
-          return {
-            id: w.id,
-            amc_order_id: w.amc_order_id,
-            staff_id: w.staff_id,
-            staff_name: w.profiles?.full_name || 'Unknown',
-            customer_name: w.amc_responses?.full_name || 'Unknown',
-            customer_email: w.amc_responses?.email || '',
-            customer_phone: w.amc_responses?.phone || '',
-            customer_company: w.amc_responses?.company_name || '',
-            customer_city: `${w.amc_responses?.city || ''}, ${w.amc_responses?.state || ''}`,
-            order_description: w.amc_responses?.problem_description || w.amc_responses?.system_usage_purpose || '',
-            urgency_level: w.amc_responses?.urgency_level || 'normal',
-            time_spent_minutes: w.time_spent_minutes || 0,
-            tasks_performed: w.tasks_performed,
-            issues_resolved: w.issues_resolved,
-            status: w.status || 'draft',
-            created_at: w.created_at,
-            updated_at: w.updated_at,
-            systems_count: systems?.length || 0,
-          };
-        })
-      );
+        return {
+          id: w.id,
+          amc_order_id: w.amc_order_id,
+          amc_form_id: response?.amc_form_id || w.amc_order_id,
+          amc_number: response?.amc_number || '',
+          staff_id: w.staff_id,
+          staff_name: profile?.full_name || 'Unknown',
+          customer_name: response?.full_name || 'Unknown',
+          customer_email: response?.email || '',
+          customer_phone: response?.phone || '',
+          customer_company: response?.company_name || '',
+          customer_city: `${response?.city || ''}, ${response?.state || ''}`,
+          order_description: response?.problem_description || response?.system_usage_purpose || '',
+          urgency_level: response?.urgency_level || 'normal',
+          time_spent_minutes: w.time_spent_minutes || 0,
+          tasks_performed: w.tasks_performed,
+          issues_resolved: w.issues_resolved,
+          status: w.status || 'draft',
+          created_at: w.created_at,
+          updated_at: w.updated_at,
+          systems_count: systemsCountMap.get(response?.amc_form_id) || 0,
+        };
+      });
 
       setWorksheets(worksheetsWithDetails);
     } catch (error) {
@@ -270,30 +339,17 @@ export default function WorksheetsPage() {
 
       if (!profile) return;
 
-      const { data, error } = await supabase
+      const { data, error } = await (supabase
         .from('amc_responses')
-        .select(`
-          amc_form_id,
-          full_name,
-          email,
-          phone,
-          company_name,
-          city,
-          state,
-          district,
-          problem_description,
-          urgency_level,
-          status,
-          created_at
-        `)
+        .select('*')
         .eq('assigned_to', profile.id)
-        .not('status', 'eq', 'completed')
-        .order('created_at', { ascending: false });
+        .not('status', 'eq', 'inactive')
+        .order('created_at', { ascending: false }) as any);
 
       if (error) throw error;
 
       const ordersWithSystems = await Promise.all(
-        (data || []).map(async (order) => {
+        ((data as any[]) || []).map(async (order) => {
           const { data: systems } = await supabase
             .from('amc_systems')
             .select('*')
@@ -314,31 +370,35 @@ export default function WorksheetsPage() {
 
   const fetchWorkLogs = async (worksheetId: string) => {
     try {
-      const { data, error } = await supabase
+      const { data: logsData, error: logsError } = await supabase
         .from('work_logs')
-        .select('id, worksheet_id, description, log_type, images, created_at')
+        .select('*')
         .eq('worksheet_id', worksheetId)
         .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      
-      const logs = (data || []).map(log => ({
+      if (logsError) throw logsError;
+
+      const logs = (logsData || []).map((log: any) => ({
         id: log.id,
         worksheet_id: log.worksheet_id,
         description: log.description,
         log_type: log.log_type,
-        time_spent_minutes: 0, // Default to 0 since column doesn't exist yet
+        time_spent_minutes: log.time_spent_minutes || 0,
         images: log.images || [],
+        status: 'approved' as const,
+        is_internal: log.is_internal ?? false,
+        internal_notes: log.internal_notes || '',
         created_at: log.created_at
       }));
+
+      // Calculate sum from logs to ensure accuracy in current view
+      const logsSum = logs.reduce((sum, log) => sum + (log.time_spent_minutes || 0), 0);
+
       setWorkLogs(logs);
-      
-      // Calculate total time from logs
-      const selectedWs = worksheets.find(w => w.id === worksheetId);
-      const total = calculateTotalTimeSpent(logs, selectedWs?.time_spent_minutes || 0);
-      setTotalTimeSpent(total);
-    } catch (error) {
+      setTotalTimeSpent(logsSum);
+    } catch (error: any) {
       console.error('Error fetching work logs:', error);
+      toast.error('Failed to load work logs. Please ensure database migrations are applied.');
     }
   };
 
@@ -365,65 +425,80 @@ export default function WorksheetsPage() {
     setImagePreviews(prev => prev.filter((_, i) => i !== index));
   };
 
-  const compressImage = async (file: File): Promise<Blob> => {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      const img = document.createElement('img');
-      
-      img.onload = () => {
-        // Max dimensions
-        const maxWidth = 1200;
-        const maxHeight = 1200;
-        let { width, height } = img;
-        
-        if (width > maxWidth || height > maxHeight) {
-          const ratio = Math.min(maxWidth / width, maxHeight / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        ctx?.drawImage(img, 0, 0, width, height);
-        
-        canvas.toBlob((blob) => {
-          resolve(blob || file);
-        }, 'image/jpeg', 0.7);
-      };
-      
-      img.src = URL.createObjectURL(file);
-    });
-  };
+  // Handle adding work log from dialog
+  const handleAddWorkLog = async () => {
+    if (!selectedWorksheet) return;
 
-  const uploadImages = async (worksheetId: string): Promise<string[]> => {
-    const urls: string[] = [];
-    
-    for (const file of uploadedImages) {
-      try {
-        const compressed = await compressImage(file);
-        const fileName = `${worksheetId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-        
-        const { error: uploadError } = await supabase.storage
-          .from('worksheet-images')
-          .upload(fileName, compressed, {
-            contentType: 'image/jpeg',
-            upsert: false,
-          });
+    // Determine values based on which UI is actually open
+    let description = logDescription;
+    let type = logType;
+    let hours = logTimeHours;
+    let minutes = logTimeMinutes;
+    let isInternal = isInternalLog;
+    let notes = internalNotes;
 
-        if (uploadError) throw uploadError;
-
-        const { data: urlData } = supabase.storage
-          .from('worksheet-images')
-          .getPublicUrl(fileName);
-
-        urls.push(urlData.publicUrl);
-      } catch (error) {
-        console.error('Error uploading image:', error);
+    // If using the Drawer panel (which uses a native form), get values from there
+    if (isAddLogDrawerOpen) {
+      const logForm = document.getElementById('log-form') as HTMLFormElement;
+      if (logForm) {
+        const formData = new FormData(logForm);
+        description = formData.get('description') as string || '';
+        type = formData.get('log_type') as string || 'progress';
+        hours = parseInt(formData.get('log_hours') as string || '0');
+        minutes = parseInt(formData.get('log_minutes') as string || '0');
+        isInternal = formData.get('is_internal') === 'true';
+        notes = formData.get('internal_notes') as string || '';
       }
     }
-    
-    return urls;
+
+    if (!description || !description.trim()) {
+      toast.error('Please provide a description');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      
+      // Calculate total time spent
+      const timeSpent = hours * 60 + minutes;
+      
+      // Upload images if any
+      let imageUrls: string[] = [];
+      if (uploadedImages.length > 0) {
+        try {
+          imageUrls = await uploadImages(uploadedImages);
+        } catch (uploadErr) {
+          console.error('Image upload failed during log addition:', uploadErr);
+          toast.error('Failed to upload some images. Proceeding with log only.');
+        }
+      }
+
+      // Add the work log
+      await addWorkLog(
+        selectedWorksheet.id,
+        description,
+        type,
+        imageUrls,
+        timeSpent,
+        isInternal,
+        notes
+      );
+
+      toast.success(
+        isAdmin 
+          ? 'Log entry added successfully' 
+          : 'Log entry added - worksheet pending approval'
+      );
+      resetLogForm();
+      setIsAddLogDialogOpen(false);
+      setIsAddLogDrawerOpen(false);
+      fetchWorksheets();
+    } catch (error: any) {
+      console.error('Error in handleAddWorkLog:', error);
+      toast.error(error.message || 'Failed to add work log');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const searchOrders = async (query: string) => {
@@ -437,6 +512,7 @@ export default function WorksheetsPage() {
         .from('amc_responses')
         .select(`
           amc_form_id,
+          amc_number,
           full_name,
           email,
           phone,
@@ -445,19 +521,23 @@ export default function WorksheetsPage() {
           state,
           district,
           problem_description,
+          service_work_description,
+          internal_notes,
+          remote_software_preference,
+          preferred_lang,
+          consent_remote_access,
           urgency_level,
           status,
           created_at
         `)
-        .or(
-          `amc_form_id.ilike.%${query}%,full_name.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%`
-        )
+        .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%,amc_number.ilike.%${query}%`)
+        .not('status', 'in', '("inactive", "cancelled")')
         .limit(10);
 
       if (error) throw error;
 
       const ordersWithSystems = await Promise.all(
-        (data || []).map(async (order) => {
+        ((data as any[]) || []).map(async (order) => {
           const { data: systems } = await supabase
             .from('amc_systems')
             .select('*')
@@ -479,16 +559,18 @@ export default function WorksheetsPage() {
 
   const handleCreateWorksheet = async (orderDetail: AmcOrderDetail) => {
     setSelectedOrderDetail(orderDetail);
+    setUploadedImageUrls([]);
     setIsOrderSearchOpen(false);
     setIsCreateDrawerOpen(true);
   };
 
-  const handleSaveWorksheet = async (formData: FormData, status: 'draft' | 'submitted') => {
+  const handleSaveWorksheet = async (formData: FormData, status: 'draft' | 'pending_approval') => {
     if (!session?.user?.id || !selectedOrderDetail) return;
 
     try {
+      setIsSubmitting(true);
       // Get profile id
-      const { data: profile } = await supabase
+      const { data: profile } = await supabase  
         .from('profiles')
         .select('id')
         .eq('user_id', session.user.id)
@@ -503,16 +585,13 @@ export default function WorksheetsPage() {
       // For edits, require approval unless it's admin
       const finalStatus = selectedWorksheet && !isAdmin ? 'pending_approval' : status;
 
-      const worksheetData = {
+      const worksheetData: any = {
         amc_order_id: selectedOrderDetail.amc_form_id,
         staff_id: profile.id,
-        time_spent_minutes: initialTimeSpent,
         tasks_performed: formData.get('tasks_performed') as string,
         issues_resolved: formData.get('issues_resolved') as string,
         status: finalStatus,
       };
-
-      let worksheetId: string;
 
       let worksheetId: string;
 
@@ -525,29 +604,31 @@ export default function WorksheetsPage() {
         if (error) throw error;
         worksheetId = selectedWorksheet.id;
         
-        // Add edit log entry
+        // If the user changed hours/minutes in the edit form, we don't apply it directly
+        // to worksheets table anymore, because logs are the source of truth.
+        // We could theoretically add a correction log, but usually tech should use Log Entry.
+        
         await addWorkLog(
           worksheetId, 
-          'Worksheet updated - requires approval', 
+          'Worksheet details updated', 
           'note', 
           uploadedImageUrls,
-          0
+          0,
+          true, // internal log for edits
+          'Details updated via edit form'
         );
       } else {
         const { data: newWorksheet, error } = await supabase
           .from('worksheets')
-          .insert(worksheetData)
-          .select('id')
-          .single();
-          .insert(worksheetData)
+          .insert({ ...worksheetData, time_spent_minutes: 0 }) 
           .select('id')
           .single();
 
         if (error) throw error;
         worksheetId = newWorksheet.id;
 
-        // Create initial log entry with upload capability
-        const initialDescription = `Worksheet created. Initial work session: ${Math.floor(initialTimeSpent / 60)}h ${initialTimeSpent % 60}m`;
+        // Create initial log entry with the time from the form
+        const initialDescription = (formData.get('initial_description') as string) || `Worksheet created. Initial work session: ${Math.floor(initialTimeSpent / 60)}h ${initialTimeSpent % 60}m`;
         await addWorkLog(
           worksheetId, 
           initialDescription, 
@@ -571,6 +652,8 @@ export default function WorksheetsPage() {
       fetchWorksheets();
     } catch (error: any) {
       toast.error(error.message || 'Failed to save worksheet');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -579,10 +662,12 @@ export default function WorksheetsPage() {
     description: string, 
     logType: string = 'progress', 
     images: string[] = [],
-    timeSpentMinutes: number = 0
+    timeSpentMinutes: number = 0,
+    isInternal: boolean = false,
+    internalNotes: string = ''
   ) => {
     try {
-      const { error } = await supabase
+      const { error: logError } = await supabase
         .from('work_logs')
         .insert({
           worksheet_id: worksheetId,
@@ -590,176 +675,66 @@ export default function WorksheetsPage() {
           log_type: logType,
           time_spent_minutes: timeSpentMinutes,
           images: images.length > 0 ? images : null,
+          is_internal: isInternal,
+          internal_notes: internalNotes,
         });
 
-      if (error) throw error;
+      if (logError) throw logError;
       
-      // Update worksheet status to require approval for new log entries (unless admin)
+      // Prepare worksheet updates
+      const worksheetUpdates: any = {
+        updated_at: new Date().toISOString()
+      };
+
+      // Force status to pending_approval for all non-admin work entries
+      // This ensures fresh logs are always reviewed by an admin
       if (!isAdmin) {
-        await supabase
-          .from('worksheets')
-          .update({ status: 'pending_approval' })
-          .eq('id', worksheetId);
+        worksheetUpdates.status = 'pending_approval';
       }
-      
-      // Refresh work logs if we're viewing this worksheet
+
+      // Update the worksheet
+      const { error: wsUpdateError } = await supabase
+        .from('worksheets')
+        .update(worksheetUpdates)
+        .eq('id', worksheetId);
+          
+      if (wsUpdateError) throw wsUpdateError;
+
+      // Update local state for immediate UI feedback
       if (selectedWorksheet && selectedWorksheet.id === worksheetId) {
+        setSelectedWorksheet(prev => prev ? { ...prev, ...worksheetUpdates } : null);
         fetchWorkLogs(worksheetId);
       }
+      
+      // Refresh the list to reflect status changes everywhere
+      fetchWorksheets();
     } catch (error) {
       console.error('Error adding work log:', error);
       throw error;
     }
   };
 
-  const handleAddLog = async (formData: FormData) => {
-    if (!selectedWorksheet) return;
-
-    try {
-      setIsUploadingImages(true);
-      
-      const description = formData.get('description') as string;
-      const logType = formData.get('log_type') as string;
-      const hours = parseInt(formData.get('log_hours') as string) || 0;
-      const minutes = parseInt(formData.get('log_minutes') as string) || 0;
-      const timeSpent = hours * 60 + minutes;
-      
-      if (!description.trim()) {
-        toast.error('Please enter a description');
-        return;
-      }
-
-      let imageUrls: string[] = [];
-      
-      // Get files from the form element directly
-      const logForm = document.getElementById('log-form') as HTMLFormElement;
-      const fileInput = logForm.querySelector('input[type="file"]') as HTMLInputElement;
-      
-      // Upload images if any
-      if (fileInput?.files && fileInput.files.length > 0) {
-        try {
-          imageUrls = await uploadImages(fileInput.files);
-        } catch (error) {
-          console.error('Image upload failed:', error);
-          toast.error('Failed to upload images. Log will be saved without images.');
-        }
-      }
-
-      await addWorkLog(selectedWorksheet.id, description, logType, imageUrls, timeSpent);
-      
-      toast.success(
-        isAdmin 
-          ? 'Log entry added successfully' 
-          : 'Log entry added - worksheet pending approval'
-      );
-      
-      setIsAddLogDrawerOpen(false);
-      
-      // Refresh worksheets to show updated status
-      fetchWorksheets();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to add log entry');
-    } finally {
-      setIsUploadingImages(false);
-    }
-  };
-
-  const handleApprove = async (worksheet: Worksheet) => {
-    if (!session?.user?.id) return;
-
-    try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', session.user.id)
-        .single();
-
-      const { error } = await supabase
-        .from('worksheets')
-        .update({
-          status: 'approved',
-          requires_approval: false,
-          approved_by: profile?.id,
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', worksheet.id);
-
-      if (error) throw error;
-
-      toast.success('Worksheet approved successfully');
-      fetchWorksheets();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to approve worksheet');
-    }
-  };
-
-  // Handle file uploads during worksheet creation
-  const handleWorksheetFileUpload = async (files: FileList) => {
-    if (files.length === 0) return;
-    
-    try {
-      setIsUploadingImages(true);
-      const urls = await uploadImages(files);
-      setUploadedImageUrls(prev => [...prev, ...urls]);
-      toast.success(`${files.length} image(s) uploaded successfully`);
-    } catch (error) {
-      console.error('Upload failed:', error);
-      toast.error('Failed to upload images');
-    } finally {
-      setIsUploadingImages(false);
-    }
-  };
-
-  const removeUploadedImage = (index: number) => {
-    setUploadedImageUrls(prev => prev.filter((_, i) => i !== index));
-  };
-
   const filteredWorksheets = selectedTab === 'all'
     ? worksheets
-    : selectedTab === 'pending_approval'
-    ? worksheets.filter(w => w.requires_approval && w.status === 'submitted')
     : worksheets.filter(w => w.status === selectedTab);
 
-  const pendingApprovalCount = worksheets.filter(w => w.requires_approval && w.status === 'submitted').length;
+  const pendingApprovalCount = worksheets.filter(w => w.status === 'pending_approval').length;
 
   const columns: Column<Worksheet>[] = [
     {
-      key: 'amc_order_id',
-      header: 'Order Details',
+      key: 'amc_form_id',
+      header: 'AMC ID',
+      cell: (worksheet) => <span className="font-mono text-xs">{formatAmcId(worksheet.amc_number, worksheet.amc_form_id)}</span>,
+    },
+    {
+      key: 'customer_name',
+      header: 'Customer',
       cell: (worksheet) => (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-primary" />
-            <span className="font-medium text-sm">#{worksheet.amc_order_id.slice(0, 8)}...</span>
-          </div>
-          <p className="font-semibold text-foreground">{worksheet.customer_name}</p>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Building className="h-3 w-3" />
-            {worksheet.customer_company || 'Individual'}
-          </div>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <MapPin className="h-3 w-3" />
-            {worksheet.customer_city}
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-xs bg-muted px-1.5 py-0.5 rounded">
-              {worksheet.systems_count} system{worksheet.systems_count !== 1 ? 's' : ''}
-            </span>
-            {worksheet.urgency_level && (
-              <StatusBadge
-                variant={
-                  worksheet.urgency_level === 'high' ? 'pending' :
-                  worksheet.urgency_level === 'medium' ? 'in_progress' : 'completed'
-                }
-                size="sm"
-              >
-                {worksheet.urgency_level} priority
-              </StatusBadge>
-            )}
-          </div>
+        <div className="flex flex-col">
+          <span className="font-medium">{worksheet.customer_name}</span>
+          <span className="text-xs text-muted-foreground">{worksheet.customer_email}</span>
         </div>
       ),
-      className: 'w-80',
     },
     {
       key: 'staff_name',
@@ -816,7 +791,7 @@ export default function WorksheetsPage() {
               <Eye className="h-4 w-4 mr-2" />
               View Details
             </DropdownMenuItem>
-            {(isTechnician || isAdmin) && (
+            {isTechnician && (
               <>
                 <DropdownMenuItem onClick={() => handleAddLogEntry(worksheet)}>
                   <MessageCircle className="h-4 w-4 mr-2" />
@@ -830,7 +805,7 @@ export default function WorksheetsPage() {
                 )}
               </>
             )}
-            {isAdmin && (worksheet.status === 'submitted' || worksheet.status === 'pending_approval') && (
+            {isAdmin && worksheet.status === 'pending_approval' && (
               <DropdownMenuItem onClick={() => handleApprove(worksheet)}>
                 <CheckCircle className="h-4 w-4 mr-2" />
                 Approve
@@ -843,6 +818,77 @@ export default function WorksheetsPage() {
     },
   ];
 
+  const resetLogForm = () => {
+    setLogDescription('');
+    setLogType('progress');
+    setLogTimeHours(0);
+    setLogTimeMinutes(15);
+    setIsInternalLog(false);
+    setInternalNotes('');
+    setUploadedImages([]);
+    setImagePreviews([]);
+  };
+
+  const handleApprove = async (worksheet: Worksheet) => {
+    try {
+      setIsSubmitting(true);
+      const { error } = await supabase
+        .from('worksheets')
+        .update({ status: 'approved', updated_at: new Date().toISOString() })
+        .eq('id', worksheet.id);
+
+      if (error) throw error;
+      toast.success('Worksheet approved');
+      setIsViewDrawerOpen(false);
+      fetchWorksheets();
+    } catch (error) {
+      console.error('Error approving worksheet:', error);
+      toast.error('Failed to approve worksheet');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReject = async (worksheet: Worksheet) => {
+    try {
+      setIsSubmitting(true);
+      const { error } = await supabase
+        .from('worksheets')
+        .update({ status: 'rejected', updated_at: new Date().toISOString() })
+        .eq('id', worksheet.id);
+
+      if (error) throw error;
+      toast.success('Worksheet rejected');
+      setIsViewDrawerOpen(false);
+      fetchWorksheets();
+    } catch (error) {
+      console.error('Error rejecting worksheet:', error);
+      toast.error('Failed to reject worksheet');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRequestApproval = async (worksheet: Worksheet) => {
+    try {
+      setIsSubmitting(true);
+      const { error } = await supabase
+        .from('worksheets')
+        .update({ status: 'pending_approval', updated_at: new Date().toISOString() })
+        .eq('id', worksheet.id);
+
+      if (error) throw error;
+      
+      toast.success('Approval requested successfully');
+      setIsViewDrawerOpen(false);
+      fetchWorksheets();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to request approval');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleView = (worksheet: Worksheet) => {
     setSelectedWorksheet(worksheet);
     fetchWorkLogs(worksheet.id);
@@ -851,10 +897,11 @@ export default function WorksheetsPage() {
 
   const handleEdit = async (worksheet: Worksheet) => {
     // Fetch full order details for editing
-    const { data: orderData } = await supabase
+    const { data: orderData } = await (supabase
       .from('amc_responses')
       .select(`
         amc_form_id,
+        amc_number,
         full_name,
         email,
         phone,
@@ -868,7 +915,7 @@ export default function WorksheetsPage() {
         created_at
       `)
       .eq('amc_form_id', worksheet.amc_order_id)
-      .single();
+      .single() as any);
 
     if (orderData) {
       const { data: systems } = await supabase
@@ -877,12 +924,13 @@ export default function WorksheetsPage() {
         .eq('amc_form_id', orderData.amc_form_id);
 
       setSelectedOrderDetail({
-        ...orderData,
+        ...(orderData as any),
         systems: systems || [],
       });
     }
     
     setSelectedWorksheet(worksheet);
+    setUploadedImageUrls([]);
     setIsCreateDrawerOpen(true);
   };
 
@@ -924,6 +972,7 @@ export default function WorksheetsPage() {
                 onClick={() => {
                   setSelectedWorksheet(null);
                   setSelectedOrderDetail(null);
+                  setUploadedImageUrls([]);
                   setIsOrderSearchOpen(true);
                 }}
               >
@@ -944,9 +993,14 @@ export default function WorksheetsPage() {
           <div className="rounded-xl border bg-card p-4 shadow-card">
             <p className="text-sm text-muted-foreground">Total Time Logged</p>
             <p className="text-2xl font-bold text-foreground mt-1">
-              {Math.floor(worksheets.reduce((sum, w) => sum + w.time_spent_minutes, 0) / 60)}h
+              {(() => {
+                const totalMinutes = worksheets.reduce((sum, w) => sum + (w.time_spent_minutes || 0), 0);
+                const hrs = Math.floor(totalMinutes / 60);
+                const mins = totalMinutes % 60;
+                return `${hrs}h ${mins}m`;
+              })()}
             </p>
-            <p className="text-xs text-muted-foreground">Worksheet time only</p>
+            <p className="text-xs text-muted-foreground">Incl. all activity logs</p>
           </div>
           <div className="rounded-xl border bg-card p-4 shadow-card">
             <p className="text-sm text-muted-foreground">Pending Approval</p>
@@ -972,9 +1026,6 @@ export default function WorksheetsPage() {
           </TabsTrigger>
           <TabsTrigger value="draft" className="data-[state=active]:bg-background data-[state=active]:shadow-sm">
             Draft
-          </TabsTrigger>
-          <TabsTrigger value="submitted" className="data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            Submitted
           </TabsTrigger>
           <TabsTrigger value="pending_approval" className="data-[state=active]:bg-background data-[state=active]:shadow-sm">
             Pending Approval
@@ -1068,48 +1119,107 @@ export default function WorksheetsPage() {
       <DrawerPanel
         open={isViewDrawerOpen}
         onClose={() => setIsViewDrawerOpen(false)}
-        title="Worksheet Details"
-        subtitle={selectedWorksheet ? `Order #${selectedWorksheet.amc_order_id.slice(0, 8)}... - ${selectedWorksheet.customer_name}` : ''}
+        title={`Worksheet: ${selectedWorksheet?.amc_form_id || ''}`}
+        subtitle={`For ${selectedWorksheet?.customer_name || 'N/A'}`}
         size="xl"
         footer={
           selectedWorksheet && (isTechnician || isAdmin) && selectedWorksheet.status !== 'approved' && (
-            <div className="flex gap-3">
-              {isTechnician && (
-                <Button
-                  className="flex-1 gradient-primary text-white"
-                  onClick={() => {
-                    resetLogForm();
-                    setIsAddLogDialogOpen(true);
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Work Log
-                </Button>
-              )}
-              {isAdmin && selectedWorksheet.requires_approval && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => handleReject(selectedWorksheet)}
+            <div className="flex flex-col gap-3 w-full">
+              <div className="flex gap-3">
+                {isTechnician && (
+                  <>
+                    <Button
+                      className="flex-1 gradient-primary text-white"
+                      disabled={isSubmitting}
+                      onClick={() => {
+                        resetLogForm();
+                        setIsAddLogDialogOpen(true);
+                      }}
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Work Log
+                    </Button>
+                    {(selectedWorksheet.status === 'rejected' || selectedWorksheet.status === 'draft') && (
+                      <Button
+                        className="flex-1 bg-info hover:bg-info/90 text-white"
+                        disabled={isSubmitting}
+                        onClick={() => handleRequestApproval(selectedWorksheet)}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Request Approval
+                      </Button>
+                    )}
+                  </>
+                )}
+                {isAdmin && selectedWorksheet.status === 'pending_approval' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      disabled={isSubmitting}
+                      onClick={() => handleReject(selectedWorksheet)}
+                    >
+                      Request Revision
+                    </Button>
+                    <Button
+                      className="flex-1 bg-success hover:bg-success/90 text-white"
+                      disabled={isSubmitting}
+                      onClick={() => handleApprove(selectedWorksheet)}
+                    >
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      Approve
+                    </Button>
+                  </>
+                )}
+              </div>
+              {isTechnician && selectedWorksheet.status === 'rejected' && (
+                <div className="space-y-2">
+                  <p className="text-xs text-center text-destructive font-medium">
+                    This worksheet was rejected. Please review logs and request approval again.
+                  </p>
+                  <Button 
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                    onClick={async () => {
+                      try {
+                        setIsSubmitting(true);
+                        await addWorkLog(
+                          selectedWorksheet.id,
+                          'Resubmitted for approval after rejection',
+                          'note',
+                          [],
+                          0,
+                          true,
+                          'Manual resubmission by technician'
+                        );
+                        toast.success('Worksheet resubmitted for approval');
+                      } catch (err: any) {
+                        toast.error(err.message || 'Failed to resubmit');
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                    }}
+                    disabled={isSubmitting}
                   >
-                    Request Revision
+                    <Send className="h-4 w-4" />
+                    {isSubmitting ? 'Resubmitting...' : 'Request Approval Again'}
                   </Button>
-                  <Button
-                    className="flex-1 bg-success hover:bg-success/90 text-white"
-                    onClick={() => handleApprove(selectedWorksheet)}
-                  >
-                    <CheckCircle className="h-4 w-4 mr-2" />
-                    Approve
-                  </Button>
-                </>
+                </div>
               )}
             </div>
           )
         }
       >
         {selectedWorksheet && (
-          <WorksheetDetails worksheet={selectedWorksheet} workLogs={workLogs} onAddLog={() => setIsAddLogDrawerOpen(true)} />
+          <WorksheetDetails 
+            worksheet={selectedWorksheet} 
+            workLogs={workLogs} 
+            onAddLog={() => setIsAddLogDrawerOpen(true)}
+            isAdmin={isAdmin}
+            onImageClick={(url) => {
+              setPreviewImageUrl(url);
+              setIsPreviewOpen(true);
+            }}
+          />
         )}
       </DrawerPanel>
 
@@ -1121,8 +1231,8 @@ export default function WorksheetsPage() {
           setSelectedWorksheet(null);
           setSelectedOrderDetail(null);
         }}
-        title={selectedWorksheet ? 'Edit Worksheet' : 'Create Worksheet'}
-        subtitle={selectedOrderDetail ? `${selectedOrderDetail.full_name} - Order #${selectedOrderDetail.amc_form_id.slice(0, 8)}...` : 'Log your service progress'}
+        title="Create New Worksheet"
+        subtitle={selectedOrderDetail ? `For: ${selectedOrderDetail.full_name}` : 'Search for an order to begin'}
         size="lg"
         footer={
           <div className="flex gap-3">
@@ -1153,7 +1263,7 @@ export default function WorksheetsPage() {
               disabled={isSubmitting}
               onClick={() => {
                 const form = document.getElementById('worksheet-form') as HTMLFormElement;
-                handleSaveWorksheet(new FormData(form), 'submitted');
+                handleSaveWorksheet(new FormData(form), 'pending_approval');
               }}
             >
               Submit for Approval
@@ -1165,13 +1275,24 @@ export default function WorksheetsPage() {
           <WorksheetForm
             worksheet={selectedWorksheet}
             orderDetail={selectedOrderDetail}
+            uploadedImageUrls={uploadedImageUrls}
+            isUploadingImages={isUploadingImages}
+            handleWorksheetFileUpload={handleWorksheetFileUpload}
+            removeUploadedImage={removeUploadedImageUrl}
+            onImageClick={(url) => {
+              setPreviewImageUrl(url);
+              setIsPreviewOpen(true);
+            }}
           />
         )}
       </DrawerPanel>
 
       <DrawerPanel
         open={isAddLogDrawerOpen}
-        onClose={() => setIsAddLogDrawerOpen(false)}
+        onClose={() => {
+          setIsAddLogDrawerOpen(false);
+          resetLogForm();
+        }}
         title="Add Work Log Entry"
         subtitle={selectedWorksheet ? `Order #${selectedWorksheet.amc_order_id.slice(0, 8)}...` : ''}
         size="md"
@@ -1182,17 +1303,19 @@ export default function WorksheetsPage() {
             </Button>
             <Button 
               className="flex-1 gradient-primary text-white" 
-              onClick={() => {
-                const form = document.getElementById('log-form') as HTMLFormElement;
-                handleAddLog(new FormData(form));
-              }}
+              onClick={handleAddWorkLog}
+              disabled={isSubmitting}
             >
-              Add Log Entry
+              {isSubmitting ? 'Adding...' : 'Add Log Entry'}
             </Button>
           </div>
         }
       >
-        <LogEntryForm />
+        <LogEntryForm 
+          onFileSelect={handleFileSelect}
+          onRemoveFile={removeImage}
+          selectedFiles={uploadedImages}
+        />
       </DrawerPanel>
 
       {/* Add Work Log Dialog */}
@@ -1256,17 +1379,52 @@ export default function WorksheetsPage() {
               <Textarea
                 value={logDescription}
                 onChange={(e) => setLogDescription(e.target.value)}
-                placeholder="Describe the work done..."
+                placeholder="Describe the work done for the customer..."
                 rows={3}
               />
+              <p className="text-[10px] text-muted-foreground">This description will be visible to the customer in their portal.</p>
             </div>
+
+            <div className="flex items-center space-x-2 pt-2">
+              <input
+                type="checkbox"
+                id="is-internal-dialog"
+                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                checked={isInternalLog}
+                onChange={(e) => setIsInternalLog(e.target.checked)}
+              />
+              <Label htmlFor="is-internal-dialog" className="text-sm font-medium leading-none cursor-pointer">
+                Add Team-Only Private Note
+              </Label>
+            </div>
+
+            {isInternalLog && (
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-1">
+                <Label>Internal Note (Private)</Label>
+                <Textarea
+                  value={internalNotes}
+                  onChange={(e) => setInternalNotes(e.target.value)}
+                  placeholder="Private details for team and admin only. Not visible to customer."
+                  rows={2}
+                  className="bg-amber-50/30 border-amber-200"
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label>Work Proof Images (Optional)</Label>
               <div className="flex flex-wrap gap-2">
                 {imagePreviews.map((preview, index) => (
                   <div key={index} className="relative h-20 w-20 rounded-lg border overflow-hidden">
-                    <img src={preview} alt="" className="h-full w-full object-cover" />
+                    <img 
+                      src={preview} 
+                      alt="" 
+                      className="h-full w-full object-cover cursor-pointer hover:opacity-80 transition-opacity" 
+                      onClick={() => {
+                        setPreviewImageUrl(preview);
+                        setIsPreviewOpen(true);
+                      }}
+                    />
                     <button
                       type="button"
                       onClick={() => removeImage(index)}
@@ -1314,6 +1472,25 @@ export default function WorksheetsPage() {
         className="hidden"
         onChange={handleFileSelect}
       />
+
+      {/* Image Preview Dialog */}
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent className="max-w-4xl p-1 bg-transparent border-none shadow-none">
+          <div className="relative w-full h-full flex items-center justify-center">
+            <button 
+              onClick={() => setIsPreviewOpen(false)}
+              className="absolute -top-10 right-0 text-white hover:text-primary transition-colors"
+            >
+              <X className="h-8 w-8" />
+            </button>
+            <img 
+              src={previewImageUrl} 
+              alt="Preview" 
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1331,7 +1508,9 @@ function OrderCard({ order, onSelect, showAssignedBadge }: {
       <div className="flex items-start justify-between mb-2">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-medium text-sm">#{order.amc_form_id.slice(0, 8)}...</span>
+            <div className="flex flex-col">
+              <span className="font-bold text-xs text-primary">{formatAmcId(order.amc_number, order.amc_form_id)}</span>
+            </div>
             {showAssignedBadge && (
               <StatusBadge variant="in_progress" size="sm">
                 {order.status}
@@ -1365,6 +1544,47 @@ function OrderCard({ order, onSelect, showAssignedBadge }: {
           </div>
         )}
       </div>
+
+      {/* Service Description for Technicians */}
+      {order.service_work_description && (
+        <div className="mt-3 pt-2 border-t">
+          <p className="text-xs font-semibold text-primary mb-1">Service Instructions:</p>
+          <p className="text-xs text-foreground bg-primary/5 p-2 rounded border border-primary/20">
+            {order.service_work_description}
+          </p>
+        </div>
+      )}
+
+      {/* Internal Notes for Technicians */}
+      {order.internal_notes && (
+        <div className="mt-2">
+          <p className="text-xs font-semibold text-amber-700 mb-1">Internal Notes:</p>
+          <p className="text-xs text-amber-900 bg-amber-50 p-2 rounded border border-amber-200">
+            {order.internal_notes}
+          </p>
+        </div>
+      )}
+
+      {/* Remote Access Preferences */}
+      {(order.remote_software_preference || order.preferred_lang) && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {order.remote_software_preference && (
+            <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+              Remote: {order.remote_software_preference}
+            </span>
+          )}
+          {order.preferred_lang && (
+            <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-200">
+              Lang: {order.preferred_lang}
+            </span>
+          )}
+          {order.consent_remote_access === false && (
+            <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200">
+              No Remote Access
+            </span>
+          )}
+        </div>
+      )}
       
       {order.systems.length > 0 && (
         <div className="mt-3 pt-2 border-t">
@@ -1382,12 +1602,22 @@ function OrderCard({ order, onSelect, showAssignedBadge }: {
   );
 }
 
-function WorksheetDetails({ worksheet, workLogs, onAddLog }: { 
+function WorksheetDetails({ 
+  worksheet, 
+  workLogs, 
+  onAddLog,
+  isAdmin,
+  onImageClick,
+}: { 
   worksheet: Worksheet; 
   workLogs: WorkLog[];
   onAddLog: () => void;
+  isAdmin: boolean;
+  onImageClick: (url: string) => void;
 }) {
-  const totalTimeSpent = workLogs.reduce((sum, log) => sum + (log.time_spent_minutes || 0), 0) + worksheet.time_spent_minutes;
+  const localTotalTime = workLogs.reduce((sum, log) => sum + (log.time_spent_minutes || 0), 0);
+  const totalTimeSpent = localTotalTime > 0 ? localTotalTime : worksheet.time_spent_minutes;
+  
   return (
     <div className="space-y-6">
       {/* Order Information */}
@@ -1425,8 +1655,13 @@ function WorksheetDetails({ worksheet, workLogs, onAddLog }: {
             </div>
           </div>
           <div>
-            <p className="text-sm text-muted-foreground mb-1">Order ID</p>
-            <p className="font-medium">#{worksheet.amc_order_id.slice(0, 16)}...</p>
+            <p className="text-sm text-muted-foreground mb-1">Order Details</p>
+            <div className="flex flex-col">
+              {worksheet.amc_number && (
+                <p className="font-bold text-primary">{worksheet.amc_number}</p>
+              )}
+              <p className="text-xs text-muted-foreground">ID: #{worksheet.amc_order_id.slice(0, 16)}...</p>
+            </div>
           </div>
         </div>
 
@@ -1540,12 +1775,27 @@ function WorksheetDetails({ worksheet, workLogs, onAddLog }: {
                           {Math.floor(log.time_spent_minutes / 60)}h {log.time_spent_minutes % 60}m
                         </div>
                       )}
+                      {log.is_internal && (
+                        <div className="flex items-center gap-1 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200 uppercase font-bold tracking-wider">
+                          Private Note Included
+                        </div>
+                      )}
                     </div>
-                    <span className="text-xs text-muted-foreground">
-                      {format(new Date(log.created_at), 'MMM dd, HH:mm')}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(log.created_at), 'MMM dd, HH:mm')}
+                      </span>
+                    </div>
                   </div>
                   <p className="text-sm">{log.description}</p>
+                  
+                  {log.is_internal && log.internal_notes && (
+                    <div className="mt-2 p-2 bg-amber-50/50 border border-amber-100 rounded text-xs italic text-amber-900/80">
+                      <span className="font-bold not-italic mr-1 text-[10px] text-amber-700">TEAM-ONLY NOTE:</span>
+                      {log.internal_notes}
+                    </div>
+                  )}
+
                   {log.images && log.images.length > 0 && (
                     <div className="flex gap-2 mt-3">
                       {log.images.map((imageUrl, i) => (
@@ -1554,9 +1804,9 @@ function WorksheetDetails({ worksheet, workLogs, onAddLog }: {
                             src={imageUrl}
                             alt={`Log image ${i + 1}`}
                             className="h-16 w-16 object-cover rounded-md border cursor-pointer hover:opacity-80 transition-opacity"
-                            onClick={() => window.open(imageUrl, '_blank')}
+                            onClick={() => onImageClick(imageUrl)}
                           />
-                          <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 bg-black/20 rounded-md transition-opacity">
+                          <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 bg-black/20 rounded-md transition-opacity pointer-events-none">
                             <Eye className="h-4 w-4 text-white" />
                           </div>
                         </div>
@@ -1582,91 +1832,20 @@ function WorksheetDetails({ worksheet, workLogs, onAddLog }: {
 function WorksheetForm({
   worksheet,
   orderDetail,
+  uploadedImageUrls,
+  isUploadingImages,
+  handleWorksheetFileUpload,
+  removeUploadedImage,
+  onImageClick,
 }: {
   worksheet: Worksheet | null;
   orderDetail: AmcOrderDetail;
+  uploadedImageUrls: string[];
+  isUploadingImages: boolean;
+  handleWorksheetFileUpload: (files: FileList) => Promise<void>;
+  removeUploadedImage: (index: number) => void;
+  onImageClick: (url: string) => void;
 }) {
-  const [isUploadingImages, setIsUploadingImages] = React.useState(false);
-  const [uploadedImageUrls, setUploadedImageUrls] = React.useState<string[]>([]);
-
-  // Upload images to Supabase storage
-  const uploadImages = async (files: FileList): Promise<string[]> => {
-    const uploadPromises = Array.from(files).map(async (file) => {
-      try {
-        // Compress image
-        const compressedBlob = await compressImage(file);
-        const compressedFile = new File([compressedBlob], file.name, {
-          type: 'image/jpeg',
-          lastModified: Date.now(),
-        });
-
-        // Generate unique filename
-        const fileExt = 'jpg';
-        const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const filePath = `worksheet-images/${fileName}`;
-
-        // Upload to Supabase storage
-        const { data, error } = await supabase.storage
-          .from('worksheets')
-          .upload(filePath, compressedFile);
-
-        if (error) throw error;
-
-        // Get public URL
-        const { data: { publicUrl } } = supabase.storage
-          .from('worksheets')
-          .getPublicUrl(filePath);
-
-        return publicUrl;
-      } catch (error) {
-        console.error('Error uploading image:', error);
-        throw error;
-      }
-    });
-
-    return Promise.all(uploadPromises);
-  };
-
-  // Utility function to compress images
-  const compressImage = (file: File, maxWidth = 1024, quality = 0.8): Promise<Blob> => {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
-      const img = new HTMLImageElement();
-      
-      img.onload = () => {
-        const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
-        canvas.width = img.width * ratio;
-        canvas.height = img.height * ratio;
-        
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(resolve, 'image/jpeg', quality);
-      };
-      
-      img.src = URL.createObjectURL(file);
-    });
-  };
-
-  // Handle file uploads during worksheet creation
-  const handleWorksheetFileUpload = async (files: FileList) => {
-    if (files.length === 0) return;
-    
-    try {
-      setIsUploadingImages(true);
-      const urls = await uploadImages(files);
-      setUploadedImageUrls(prev => [...prev, ...urls]);
-      // toast.success(`${files.length} image(s) uploaded successfully`);
-    } catch (error) {
-      console.error('Upload failed:', error);
-      // toast.error('Failed to upload images');
-    } finally {
-      setIsUploadingImages(false);
-    }
-  };
-
-  const removeUploadedImage = (index: number) => {
-    setUploadedImageUrls(prev => prev.filter((_, i) => i !== index));
-  };
   return (
     <form id="worksheet-form" className="space-y-6">
       {/* Order Summary */}
@@ -1681,8 +1860,8 @@ function WorksheetForm({
             )}
           </div>
           <div>
-            <p className="text-sm text-muted-foreground">Order ID</p>
-            <p className="font-medium">#{orderDetail.amc_form_id.slice(0, 16)}...</p>
+            <p className="text-sm text-muted-foreground">Order Details</p>
+            <p className="font-bold text-xs text-primary">{formatAmcId(orderDetail.amc_number, orderDetail.amc_form_id)}</p>
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Location</p>
@@ -1723,26 +1902,26 @@ function WorksheetForm({
         )}
       </div>
 
-      {selectedOrder && (
+      {orderDetail && (
         <div className="rounded-lg border p-4 bg-muted/30">
           <h4 className="font-semibold mb-2">Order Details</h4>
           <div className="grid gap-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Customer:</span>
-              <span>{selectedOrder.full_name}</span>
+              <span>{orderDetail.full_name}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Phone:</span>
-              <span>{selectedOrder.phone}</span>
+              <span>{orderDetail.phone}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Location:</span>
-              <span>{selectedOrder.city}, {selectedOrder.state}</span>
+              <span>{orderDetail.city}, {orderDetail.state}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Status:</span>
-              <StatusBadge variant={selectedOrder.status as any} size="sm">
-                {formatStatus(selectedOrder.status)}
+              <StatusBadge variant={orderDetail.status as any} size="sm">
+                {formatStatus(orderDetail.status)}
               </StatusBadge>
             </div>
           </div>
@@ -1843,7 +2022,8 @@ function WorksheetForm({
                 <img
                   src={url}
                   alt={`Upload ${index + 1}`}
-                  className="w-full h-16 object-cover rounded border"
+                  className="w-full h-16 object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => onImageClick(url)}
                 />
                 <button
                   type="button"
@@ -1871,18 +2051,15 @@ function WorksheetForm({
   );
 }
 
-function LogEntryForm() {
-  const [selectedFiles, setSelectedFiles] = React.useState<File[]>([]);
-
-  const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
-    setSelectedFiles(prev => [...prev, ...files]);
-  };
-
-  const removeFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
+function LogEntryForm({ 
+  onFileSelect, 
+  onRemoveFile, 
+  selectedFiles 
+}: { 
+  onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onRemoveFile: (index: number) => void;
+  selectedFiles: File[];
+}) {
   return (
     <form id="log-form" className="space-y-6">
       <div className="space-y-2">
@@ -1929,10 +2106,42 @@ function LogEntryForm() {
         <Label>Description</Label>
         <Textarea
           name="description"
-          placeholder="Describe the work progress, issue found, or resolution applied..."
-          rows={4}
+          placeholder="Describe the work done for the customer..."
+          rows={3}
           required
         />
+        <p className="text-[10px] text-muted-foreground">This description will be visible to the customer.</p>
+      </div>
+
+      <div className="space-y-4 rounded-lg border p-4 bg-muted/20">
+        <div className="flex items-center space-x-2">
+          <input
+            type="checkbox"
+            name="is_internal_toggle"
+            id="is-internal-drawer"
+            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            onChange={(e) => {
+              const notesField = document.getElementById('internal-notes-container');
+              if (notesField) notesField.style.display = e.target.checked ? 'block' : 'none';
+              const hiddenInput = document.getElementById('is_internal_hidden') as HTMLInputElement;
+              if (hiddenInput) hiddenInput.value = e.target.checked ? 'true' : 'false';
+            }}
+          />
+          <Label htmlFor="is-internal-drawer" className="font-medium cursor-pointer">
+            Internal Team Entry
+          </Label>
+        </div>
+        
+        <input type="hidden" name="is_internal" id="is_internal_hidden" value="false" />
+
+        <div id="internal-notes-container" className="space-y-2" style={{ display: 'none' }}>
+          <Label>Internal Notes / Admin Feedback</Label>
+          <Textarea
+            name="internal_notes"
+            placeholder="Private notes for team and admin only..."
+            rows={2}
+          />
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -1950,7 +2159,7 @@ function LogEntryForm() {
               type="file"
               multiple
               accept="image/*"
-              onChange={handleFileSelection}
+              onChange={onFileSelect}
               className="hidden"
               id="log-file-upload"
             />
@@ -1978,7 +2187,7 @@ function LogEntryForm() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => removeFile(index)}
+                      onClick={() => onRemoveFile(index)}
                       className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
                     >
                       ×

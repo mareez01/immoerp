@@ -2,10 +2,11 @@ import React from 'react';
 import { cn } from '@/lib/utils';
 import { LucideIcon, TrendingUp, TrendingDown } from 'lucide-react';
 
-interface StatCardProps {
+export interface StatCardProps {
   title: string;
   value: string | number;
   icon: LucideIcon;
+  subtitle?: string;
   trend?: {
     value: number;
     label: string;
@@ -18,6 +19,7 @@ export function StatCard({
   title,
   value,
   icon: Icon,
+  subtitle,
   trend,
   className,
   iconClassName,
@@ -35,6 +37,9 @@ export function StatCard({
         <div>
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
           <p className="mt-2 text-3xl font-bold text-foreground">{value}</p>
+          {subtitle && (
+            <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
+          )}
           {trend && (
             <div className="mt-2 flex items-center gap-1">
               {isPositive ? (

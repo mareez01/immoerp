@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Eye, MoreHorizontal, MessageSquare, User, Clock, Send, AlertCircle, UserPlus, FileText, Link as LinkIcon } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Eye, MoreHorizontal, MessageSquare, User, Clock, Send, AlertCircle, UserPlus, FileText, Link as LinkIcon, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge, formatStatus } from '@/components/ui/status-badge';
@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { useTicketNotifications } from '@/hooks/use-realtime';
 
 interface Ticket {
   id: string;
@@ -87,6 +88,27 @@ export default function SupportTicketsPage() {
   const isAdmin = user?.role === 'admin';
   const isTechnician = user?.role === 'technician';
   const isSupport = user?.role === 'support';
+
+  // Real-time ticket notifications
+  const fetchTicketsCallback = useCallback(() => {
+    fetchTickets();
+  }, []);
+
+  const fetchMessagesCallback = useCallback((msg: any) => {
+    // Only add message if viewing the same ticket
+    if (selectedTicket && msg.ticket_id === selectedTicket.id) {
+      setMessages(prev => {
+        if (prev.some(m => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
+    }
+  }, [selectedTicket]);
+
+  useTicketNotifications({
+    onNewTicket: fetchTicketsCallback,
+    onTicketUpdate: fetchTicketsCallback,
+    onNewMessage: fetchMessagesCallback,
+  });
 
   useEffect(() => {
     fetchTickets();
@@ -287,6 +309,7 @@ export default function SupportTicketsPage() {
   // Calculate stats
   const openCount = tickets.filter(t => t.status === 'open').length;
   const inProgressCount = tickets.filter(t => t.status === 'in_progress').length;
+  const resolvedCount = tickets.filter(t => t.status === 'resolved').length;
   const urgentCount = tickets.filter(t => t.priority === 'urgent' || t.priority === 'high').length;
   const unassignedCount = tickets.filter(t => !t.assigned_to && t.status !== 'closed' && t.status !== 'resolved').length;
 
@@ -437,7 +460,7 @@ export default function SupportTicketsPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-5">
         <div className="rounded-xl border bg-card p-4 shadow-card">
           <p className="text-sm text-muted-foreground">Open Tickets</p>
           <p className="text-2xl font-bold text-foreground mt-1">{openCount}</p>
@@ -445,6 +468,13 @@ export default function SupportTicketsPage() {
         <div className="rounded-xl border bg-card p-4 shadow-card">
           <p className="text-sm text-muted-foreground">In Progress</p>
           <p className="text-2xl font-bold text-warning mt-1">{inProgressCount}</p>
+        </div>
+        <div className="rounded-xl border p-4 shadow-card border-success/30 bg-success/5 flex items-center gap-3">
+          <div>
+            <p className="text-sm text-muted-foreground">Resolved</p>
+            <p className="text-2xl font-bold text-success mt-1">{resolvedCount}</p>
+          </div>
+          {resolvedCount > 0 && <CheckCircle2 className="h-6 w-6 text-success" />}
         </div>
         <div className={cn(
           "rounded-xl border bg-card p-4 shadow-card flex items-center gap-3",
@@ -599,14 +629,21 @@ export default function SupportTicketsPage() {
                 <div>
                   <Label className="text-sm font-medium mb-2 block">Assign To</Label>
                   <Select
-                    value={selectedTicket.assigned_to || ''}
-                    onValueChange={(value) => handleAssignTicket(selectedTicket.id, value)}
+                    value={selectedTicket.assigned_to || 'unassigned'}
+                    onValueChange={(value) => {
+                      if (value === 'unassigned') {
+                        handleUpdateTicket(selectedTicket.id, { assigned_to: null, status: 'open' });
+                      } else {
+                        handleAssignTicket(selectedTicket.id, value);
+                      }
+                    }}
                     disabled={!isAdmin && !isSupport}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select staff..." />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="unassigned">Unassigned</SelectItem>
                       {staffList.map(staff => (
                         <SelectItem key={staff.id} value={staff.id}>
                           <div className="flex items-center gap-2">

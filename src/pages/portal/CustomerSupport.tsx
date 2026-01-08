@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { formatAmcId } from '@/lib/utils';
 
 export default function CustomerPortalSupport() {
   const { session } = useAuth();
@@ -241,15 +242,15 @@ export default function CustomerPortalSupport() {
 
           <div className="space-y-2">
             <Label>Related Order (Optional)</Label>
-            <Select value={relatedOrderId} onValueChange={setRelatedOrderId}>
+            <Select value={relatedOrderId || 'none'} onValueChange={(v) => setRelatedOrderId(v === 'none' ? '' : v)}>
               <SelectTrigger>
                 <SelectValue placeholder="Select an order" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">No specific order</SelectItem>
+                <SelectItem value="none">No specific order</SelectItem>
                 {orders.map(order => (
                   <SelectItem key={order.amc_form_id} value={order.amc_form_id}>
-                    #{order.amc_form_id.slice(0, 8)} - {order.system_usage_purpose}
+                    {formatAmcId(order.amc_number, order.amc_form_id)} - {order.system_usage_purpose}
                   </SelectItem>
                 ))}
               </SelectContent>

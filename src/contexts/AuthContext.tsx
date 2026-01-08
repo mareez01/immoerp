@@ -57,8 +57,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.error('Error fetching roles:', rolesError);
       }
 
-      // Determine role (default to no role for customers)
-      const userRole = roles && roles.length > 0 ? roles[0].role as UserRole : null;
+      // Determine role - check user_roles table only (profile doesn't have role field)
+      let userRole: UserRole | null = null;
+      if (roles && roles.length > 0) {
+        userRole = roles[0].role as UserRole;
+      }
 
       return {
         id: userId,

@@ -19,6 +19,7 @@ import CustomerPortalInvoices from "@/pages/portal/CustomerInvoices";
 import CustomerPortalSupport from "@/pages/portal/CustomerSupport";
 import NotFound from "./pages/NotFound";
 
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -71,7 +72,7 @@ const App = () => (
               } />
             </Route>
 
-            {/* Customer Portal Routes */}
+            {/* Customer Portal Routes - Now Hosted at customer.flsmartech.com */}
             <Route element={
               <ProtectedRoute customerOnly>
                 <MainLayout />

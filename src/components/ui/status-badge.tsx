@@ -17,6 +17,7 @@ const statusBadgeVariants = cva(
         unsubscribed: "bg-destructive/10 text-destructive border border-destructive/20",
         paid: "bg-success/10 text-success border border-success/20",
         overdue: "bg-destructive/10 text-destructive border border-destructive/20",
+        pending_approval: "bg-amber-100 text-amber-700 border border-amber-200",
         draft: "bg-muted text-muted-foreground border border-border",
         sent: "bg-info/10 text-info border border-info/20",
         scheduled: "bg-info/10 text-info border border-info/20",
@@ -88,7 +89,8 @@ export function StatusBadge({
   );
 }
 
-export function formatStatus(status: string): string {
+export function formatStatus(status?: string | null): string {
+  if (!status) return 'N/A';
   return status
     .replace(/_/g, ' ')
     .replace(/\b\w/g, char => char.toUpperCase());
