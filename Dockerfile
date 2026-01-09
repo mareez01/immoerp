@@ -1,20 +1,17 @@
-# Build stage
-FROM node:20-alpine AS builder
+FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+COPY package.json .
 
-# Install dependencies
-RUN npm ci
+RUN npm install
 
-# Copy source files
+RUN npm i -g serve
+
 COPY . .
 
-# Build the application
 RUN npm run build
 
 EXPOSE 3004
 
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3004"]
+CMD [ "serve", "-s", "dist" ]
