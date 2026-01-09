@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+DOCKER.md
+DEPLOYMENT.node_modules
+*.bat
+*.sh

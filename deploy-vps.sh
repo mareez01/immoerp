@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 REGISTRY="ghcr.io"
-OWNER="fl-smartech"
+OWNER="immoco"
 IMAGE_NAME="amc-erp"
 VERSION="${1:-latest}"
 CONTAINER_NAME="amc-erp-app"
