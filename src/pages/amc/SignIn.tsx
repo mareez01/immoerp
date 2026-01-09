@@ -104,6 +104,11 @@ export default function AMCSignIn() {
                 onChange={(e) => setPassword(e.target.value)} 
                 required 
               />
+              <div className="text-right">
+                <Link to="/amc/forgot-password" className="text-sm text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
             </div>
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign In'}

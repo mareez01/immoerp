@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Wrench, Mail, Lock, Eye, EyeOff, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -186,6 +186,11 @@ export default function Login() {
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
+                  </div>
+                  <div className="text-right">
+                    <Link to="/forgot-password" className="text-sm text-primary hover:underline">
+                      Forgot password?
+                    </Link>
                   </div>
                 </div>
 

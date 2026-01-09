@@ -6,6 +6,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AMCAuthProvider, useAMCAuth } from "@/contexts/AMCAuthContext";
 import AMCSignUp from "@/pages/amc/SignUp";
 import AMCSignIn from "@/pages/amc/SignIn";
+import AMCForgotPassword from "@/pages/amc/ForgotPassword";
+import AMCResetPassword from "@/pages/amc/ResetPassword";
 import AMCForm from "@/pages/amc/Form";
 import AMCPayment from "@/pages/amc/Payment";
 import AMCSuccess from "@/pages/amc/Success";
@@ -46,6 +48,8 @@ const AMCApp = () => (
           {/* Auth Routes */}
           <Route path="/amc/signup" element={<AMCSignUp />} />
           <Route path="/amc/signin" element={<AMCSignIn />} />
+          <Route path="/amc/forgot-password" element={<AMCForgotPassword />} />
+          <Route path="/amc/reset-password" element={<AMCResetPassword />} />
           
           {/* Customer Portal Routes - Protected */}
           <Route path="/amc" element={<AMCProtectedRoute><CustomerPortalLayout /></AMCProtectedRoute>}>

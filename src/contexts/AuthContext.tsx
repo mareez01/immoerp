@@ -23,6 +23,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ error: Error | null }>;
   signup: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error: Error | null }>;
+  updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
   isCustomer: boolean;
 }
 
@@ -165,6 +167,40 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSession(null);
   };
 
+  const resetPassword = async (email: string) => {
+    try {
+      const redirectUrl = `${window.location.origin}/reset-password`;
+      
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: redirectUrl,
+      });
+      
+      if (error) {
+        return { error };
+      }
+      
+      return { error: null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  };
+
+  const updatePassword = async (newPassword: string) => {
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      
+      if (error) {
+        return { error };
+      }
+      
+      return { error: null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  };
+
   const isCustomer = user !== null && user.role === null;
 
   return (
@@ -177,6 +213,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         login,
         signup,
         logout,
+        resetPassword,
+        updatePassword,
         isCustomer,
       }}
     >
