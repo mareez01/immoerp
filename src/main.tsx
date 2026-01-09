@@ -5,16 +5,9 @@ import "./index.css";
 
 const hostname = window.location.hostname;
 
-let RootApp;
+let CustomerApp;
 
-if (hostname.startsWith("customer.")) {
-  RootApp = AMCApp;
-} else if (hostname.startsWith("portal.")) {
-  RootApp = App;
-} else {
-  // fallback (localhost / unknown)
-  RootApp = App;
-}
+if (hostname.startsWith("customer.")) CustomerApp = true
 
 const rootEl = document.getElementById("root");
 

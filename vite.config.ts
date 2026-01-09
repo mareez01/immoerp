@@ -11,6 +11,11 @@ export default defineConfig(({ mode }) => ({
     outDir: "dist",
     emptyOutDir: true
   },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
   preview: {
     host: true,
     port: 3000,
