@@ -5,14 +5,10 @@ import "./index.css";
 
 const hostname = window.location.hostname;
 
-let CustomerApp;
+let CustomerApp=false;
 
-if (hostname.startsWith("customer.")) CustomerApp = true
+if (hostname.startsWith("customer.")) CustomerApp = true;
 
-const rootEl = document.getElementById("root");
+const AppToRender = CustomerApp ? <AMCApp /> : <App />;
 
-if (!rootEl) {
-  throw new Error("Root element not found");
-}
-
-createRoot(rootEl).render(<RootApp />);
+createRoot(document.getElementById("root")!).render(AppToRender);
