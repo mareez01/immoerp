@@ -14,18 +14,10 @@ const searchParams = new URLSearchParams(window.location.search);
  * - localhost with ?portal=customer → Customer Portal (for testing)
  * - localhost with ?portal=staff or default → Staff Panel (for testing)
  */
-// const isCustomerPortal = 
-//   hostname.includes('customer.flsmartech.com') || 
-//   hostname.startsWith('customer.') ||
-//   searchParams.get('portal') === 'customer';
-
-const isCustomerPortal = false;
-
-const isStaffPortal = 
-  hostname.includes('portal.flsmartech.com') || 
-  hostname.startsWith('portal.') ||
-  searchParams.get('portal') === 'staff' ||
-  (!isCustomerPortal && hostname === 'localhost'); // Default localhost to staff
+const isCustomerPortal = 
+  hostname.includes('customer.flsmartech.com') || 
+  hostname.startsWith('customer.') ||
+  searchParams.get('portal') === 'customer';
 
 // Staff portal as default, customer portal for customer subdomain
 const AppToRender = isCustomerPortal ? <AMCApp /> : <App />;

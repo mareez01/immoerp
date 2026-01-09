@@ -21,6 +21,8 @@ interface AMCAuthContextType {
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signInWithEmail: (email: string, password: string) => Promise<{ error: Error | null; emailNotConfirmed?: boolean }>;
   logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error: Error | null }>;
+  updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
 }
 
 const AMCAuthContext = createContext<AMCAuthContextType | undefined>(undefined);
@@ -136,6 +138,32 @@ export const AMCAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
+  const resetPassword = async (email: string) => {
+    try {
+      const redirectUrl = `${window.location.origin}/amc/reset-password`;
+      
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: redirectUrl,
+      });
+      
+      return { error: error as Error | null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  };
+
+  const updatePassword = async (newPassword: string) => {
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      
+      return { error: error as Error | null };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  };
+
   const logout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -153,6 +181,8 @@ export const AMCAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
         signUpWithEmail,
         signInWithEmail,
         logout,
+        resetPassword,
+        updatePassword,
       }}
     >
       {children}
