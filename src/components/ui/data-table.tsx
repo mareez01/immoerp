@@ -50,9 +50,11 @@ export function DataTable<T extends Record<string, any>>({
 
   const filteredData = React.useMemo(() => {
     if (!search || !searchKey) return data;
-    return data.filter(item =>
-      String(item[searchKey]).toLowerCase().includes(search.toLowerCase())
-    );
+    return data.filter(item => {
+      const value = item[searchKey];
+      if (value === undefined || value === null) return false;
+      return String(value).toLowerCase().includes(search.toLowerCase());
+    });
   }, [data, search, searchKey]);
 
   const totalPages = Math.ceil(filteredData.length / pageSize);

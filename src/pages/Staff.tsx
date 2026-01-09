@@ -24,7 +24,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { accessSync } from 'fs';
+import type { UserRole } from '@/types';
 
 interface Staff {
   id: string;
@@ -34,12 +34,13 @@ interface Staff {
   phone?: string;
   department?: string;
   is_active: boolean;
-  role?: AppRole;
+  role?: UserRole;
   assigned_orders_count?: number;
+  total_service_time?: number;
 }
 
 const departments = ['All', 'Management', 'Technical Support', 'Customer Support', 'Finance'];
-const roles: { value: AppRole; label: string }[] = [
+const roles: { value: UserRole; label: string }[] = [
   { value: 'admin', label: 'Admin' },
   { value: 'technician', label: 'Technician' },
   { value: 'support', label: 'Customer Support' },
@@ -55,6 +56,14 @@ export default function StaffPage() {
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingStaff, setIsAddingStaff] = useState(false);
+  const [isAddDrawerOpen, setIsAddDrawerOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newStaffName, setNewStaffName] = useState('');
+  const [newStaffEmail, setNewStaffEmail] = useState('');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
+  const [newStaffPhone, setNewStaffPhone] = useState('');
+  const [newStaffDepartment, setNewStaffDepartment] = useState('Technical Support');
+  const [newStaffRole, setNewStaffRole] = useState<UserRole>('technician');
 
   useEffect(() => {
     fetchStaff();
@@ -90,6 +99,18 @@ export default function StaffPage() {
         }
       });
 
+      // Fetch service time for technicians
+      const { data: worksheets } = await supabase
+        .from('worksheets')
+        .select('staff_id, time_spent_minutes');
+      
+      const timeSumMap = new Map<string, number>();
+      worksheets?.forEach(w => {
+        if (w.staff_id) {
+          timeSumMap.set(w.staff_id, (timeSumMap.get(w.staff_id) || 0) + (w.time_spent_minutes || 0));
+        }
+      });
+
       // Only include profiles that have roles (staff members)
       const staffWithRoles = profiles?.filter(p => 
         p.user_id && roleMap.has(p.user_id)
@@ -101,8 +122,9 @@ export default function StaffPage() {
         phone: p.phone || undefined,
         department: p.department || 'General',
         is_active: p.is_active ?? true,
-        role: roleMap.get(p.user_id) as AppRole,
+        role: roleMap.get(p.user_id) as UserRole,
         assigned_orders_count: assignedCounts.get(p.id) || 0,
+        total_service_time: timeSumMap.get(p.id) || 0,
       })) || [];
 
       setStaffList(staffWithRoles);
@@ -211,7 +233,7 @@ export default function StaffPage() {
     }
   };
 
-  const handleUpdateRole = async (staff: Staff, newRole: AppRole) => {
+  const handleUpdateRole = async (staff: Staff, newRole: UserRole) => {
     if (!staff.user_id) return;
 
     try {
@@ -278,10 +300,9 @@ export default function StaffPage() {
         staff: formData,
       };
 
-      const res = await fetch(
-      "http://localhost:3000/api/admin/create-staff",
+      const {data:res, error:dataError} = await supabase.functions.invoke(
+      "create-staff",
       {
-        method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${accessToken}`,
@@ -412,10 +433,10 @@ export default function StaffPage() {
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-lg">
-                    {staff.full_name.charAt(0)}
+                    {staff.full_name?.charAt(0) || '?'}
                   </div>
                   <div>
-                    <p className="font-semibold text-foreground">{staff.full_name}</p>
+                    <p className="font-semibold text-foreground">{staff.full_name || 'Unknown'}</p>
                     <p className="text-sm text-muted-foreground capitalize">{staff.role}</p>
                   </div>
                 </div>
@@ -467,10 +488,16 @@ export default function StaffPage() {
               </div>
 
               {staff.role === 'technician' && (
-                <div className="mt-4 pt-4 border-t">
+                <div className="mt-4 pt-4 border-t space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Assigned Orders</span>
                     <span className="font-semibold text-foreground">{staff.assigned_orders_count || 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Total Service Time</span>
+                    <span className="font-semibold text-primary">
+                      {Math.floor((staff.total_service_time || 0) / 60)}h {(staff.total_service_time || 0) % 60}m
+                    </span>
                   </div>
                 </div>
               )}
@@ -544,7 +571,7 @@ export default function StaffPage() {
               </div>
               <div className="space-y-2">
                 <Label>Role *</Label>
-                <Select value={newStaffRole} onValueChange={(v) => setNewStaffRole(v as AppRole)}>
+                <Select value={newStaffRole} onValueChange={(v) => setNewStaffRole(v as UserRole)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -799,15 +826,15 @@ function AddStaffForm() {
   );
 }
 
-function StaffDetails({ staff }: { staff: Staff }) {
+function StaffDetails({ staff, onUpdateRole }: { staff: Staff; onUpdateRole?: (staff: Staff, newRole: UserRole) => Promise<void> }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-2xl">
-          {staff.full_name.charAt(0)}
+          {staff.full_name?.charAt(0) || '?'}
         </div>
         <div>
-          <h3 className="text-xl font-semibold text-foreground">{staff.full_name}</h3>
+          <h3 className="text-xl font-semibold text-foreground">{staff.full_name || 'Unknown'}</h3>
           <p className="text-muted-foreground capitalize">{staff.role}</p>
           <StatusBadge variant={staff.is_active ? 'active' : 'inactive'} className="mt-2">
             {staff.is_active ? 'Active' : 'Inactive'}
@@ -839,7 +866,7 @@ function StaffDetails({ staff }: { staff: Staff }) {
           </div>
           <Select 
             value={staff.role} 
-            onValueChange={(value) => onUpdateRole(staff, value as AppRole)}
+            onValueChange={(value) => onUpdateRole?.(staff, value as UserRole)}
           >
             <SelectTrigger>
               <SelectValue />
@@ -855,9 +882,17 @@ function StaffDetails({ staff }: { staff: Staff }) {
         </div>
 
         {staff.role === 'technician' && (
-          <div className="rounded-lg border p-4">
-            <p className="text-sm text-muted-foreground mb-1">Assigned Orders</p>
-            <p className="font-medium">{staff.assigned_orders_count || 0}</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground mb-1">Assigned Orders</p>
+              <p className="font-medium">{staff.assigned_orders_count || 0}</p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground mb-1">Total Service Time</p>
+              <p className="font-medium text-primary">
+                {Math.floor((staff.total_service_time || 0) / 60)}h {(staff.total_service_time || 0) % 60}m
+              </p>
+            </div>
           </div>
         )}
       </div>
