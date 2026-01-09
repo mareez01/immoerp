@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Shield, Lock, CreditCard, Monitor, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Shield, Lock, CreditCard, Monitor, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 declare global {
   interface Window { Razorpay: any; }
@@ -24,21 +24,112 @@ interface PaymentState {
   systemCount: number;
 }
 
+// Polling configuration
+const POLL_INTERVAL_MS = 2000; // Check every 2 seconds
+const MAX_POLL_ATTEMPTS = 30; // Maximum 60 seconds of polling (30 * 2s)
+
 export const Payment: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { amcId, amount, systemCount } = (location.state as PaymentState) || {};
   const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [amcData, setAmcData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollCountRef = useRef(0);
 
   // Validate amount on mount
   const isAmountValid = amount && systemCount && amount === systemCount * AMC_PRICE_PER_SYSTEM && amount % AMC_PRICE_PER_SYSTEM === 0;
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!amcId) return;
     db.from('amc_responses').select('full_name, email, phone, amc_form_id').eq('amc_form_id', amcId).single().then(({ data }: { data: any }) => setAmcData(data));
   }, [amcId]);
+
+  // Poll payment status from amc_payments table
+  const pollPaymentStatus = useCallback((razorpayOrderId: string, razorpayPaymentId: string) => {
+    setVerifying(true);
+    pollCountRef.current = 0;
+
+    const checkStatus = async () => {
+      pollCountRef.current += 1;
+
+      try {
+        // Check amc_payments table for status update from webhook
+        const { data: paymentData, error: paymentError } = await db
+          .from('amc_payments')
+          .select('status, verified_at, razorpay_payment_id')
+          .eq('razorpay_order_id', razorpayOrderId)
+          .single();
+
+        if (paymentError) {
+          console.error('Error fetching payment status:', paymentError);
+        }
+
+        if (paymentData) {
+          // Payment captured by webhook
+          if (paymentData.status === 'captured' && paymentData.verified_at) {
+            clearInterval(pollIntervalRef.current!);
+            pollIntervalRef.current = null;
+            setVerifying(false);
+            setLoading(false);
+            toast.success('Payment Successful!');
+            navigate('/amc/success', { 
+              state: { 
+                amcId, 
+                paymentId: paymentData.razorpay_payment_id || razorpayPaymentId 
+              } 
+            });
+            return;
+          }
+
+          // Payment failed
+          if (paymentData.status === 'failed') {
+            clearInterval(pollIntervalRef.current!);
+            pollIntervalRef.current = null;
+            setVerifying(false);
+            setLoading(false);
+            setError('Payment failed. Please try again.');
+            navigate('/amc/failure', { state: { amcId, error: 'Payment failed' } });
+            return;
+          }
+        }
+
+        // Max polling reached - assume verification pending
+        if (pollCountRef.current >= MAX_POLL_ATTEMPTS) {
+          clearInterval(pollIntervalRef.current!);
+          pollIntervalRef.current = null;
+          setVerifying(false);
+          setLoading(false);
+          toast.info('Payment processing. You will receive confirmation shortly.');
+          navigate('/amc/success', { 
+            state: { 
+              amcId, 
+              paymentId: razorpayPaymentId, 
+              verificationPending: true 
+            } 
+          });
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    };
+
+    // Start polling
+    pollIntervalRef.current = setInterval(checkStatus, POLL_INTERVAL_MS);
+    // Also check immediately
+    checkStatus();
+  }, [amcId, navigate]);
 
   if (!amcId) return <Navigate to="/amc/form" replace />;
 
@@ -50,18 +141,25 @@ export const Payment: React.FC = () => {
 
     setLoading(true);
     setError(null);
-    
+
+    const session = await supabase.auth.getSession();
+      
     try {
       // Call backend to create Razorpay order
       const { data: orderData, error: orderError } = await supabase.functions.invoke('razorpay-create-order', {
-        body: {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.data.session.access_token}`,
+        },
+        body: JSON.stringify({
           amcFormId: amcId,
           systemCount,
           customerName: amcData?.full_name || 'Customer',
           customerEmail: amcData?.email || '',
           customerPhone: amcData?.phone || '',
-        },
+        }),
       });
+
 
       if (orderError) throw new Error(orderError.message || 'Failed to create payment order');
       if (!orderData?.success) throw new Error(orderData?.error || 'Order creation failed');
@@ -78,32 +176,15 @@ export const Payment: React.FC = () => {
         key: orderData.keyId,
         amount: orderData.amountInPaise,
         currency: orderData.currency,
-        name: 'FL Smartech',
+        name: 'FL Smartech Private Limited',
         description: `AMC for ${systemCount} system${systemCount > 1 ? 's' : ''}`,
         order_id: orderData.orderId,
         prefill: orderData.prefill,
         handler: async (response: any) => {
-          try {
-            // Verify payment on backend
-            const { data: verifyData, error: verifyError } = await supabase.functions.invoke('razorpay-verify-payment', {
-              body: {
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-                amc_form_id: amcId,
-              },
-            });
-
-            if (verifyError) throw new Error(verifyError.message || 'Payment verification failed');
-            if (!verifyData?.verified) throw new Error('Payment verification failed');
-
-            toast.success('Payment Successful!');
-            navigate('/amc/success', { state: { amcId, paymentId: response.razorpay_payment_id } });
-          } catch (verifyErr: any) {
-            console.error('Verification error:', verifyErr);
-            toast.error('Payment completed but verification failed. Please contact support.');
-            navigate('/amc/success', { state: { amcId, paymentId: response.razorpay_payment_id, verificationPending: true } });
-          }
+          // Payment completed on Razorpay side
+          // Start polling to check if webhook has verified the payment
+          toast.info('Verifying payment...');
+          pollPaymentStatus(response.razorpay_order_id, response.razorpay_payment_id);
         },
         modal: {
           ondismiss: () => {
@@ -186,6 +267,16 @@ export const Payment: React.FC = () => {
             </Alert>
           )}
 
+          {/* Verification in progress */}
+          {verifying && (
+            <Alert className="bg-blue-50 border-blue-200">
+              <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
+              <AlertDescription className="text-blue-800">
+                Verifying your payment... Please wait.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Amount validation warning */}
           {!isAmountValid && amount && (
             <Alert className="bg-amber-50 border-amber-200">
@@ -217,9 +308,14 @@ export const Payment: React.FC = () => {
           <Button 
             className="w-full h-12 text-lg gradient-primary text-white" 
             onClick={handlePayment} 
-            disabled={loading || !isAmountValid}
+            disabled={loading || verifying || !isAmountValid}
           >
-            {loading ? (
+            {verifying ? (
+              <>
+                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                Verifying Payment...
+              </>
+            ) : loading ? (
               <>
                 <div className="h-5 w-5 mr-2 animate-spin rounded-full border-2 border-white border-t-transparent" />
                 Processing...

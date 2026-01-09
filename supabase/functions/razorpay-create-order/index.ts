@@ -5,6 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 const RAZORPAY_KEY_ID = Deno.env.get("RAZORPAY_KEY_ID");
 const RAZORPAY_KEY_SECRET = Deno.env.get("RAZORPAY_KEY_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 // Price per system for AMC
@@ -41,6 +42,32 @@ function validateAmount(systemCount: number): { valid: boolean; amount: number }
   return { valid: true, amount };
 }
 
+// Auth verification
+async function verifySupabaseUser(req: Request) {
+  const authHeader = req.headers.get("authorization");
+
+  if (!authHeader) {
+    throw new Error("Missing Authorization header");
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY!,
+    },
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    console.error("Auth validation failed:", errorData);
+    throw new Error("Invalid or expired session");
+  }
+
+  return await res.json(); // returns user object
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -48,7 +75,11 @@ serve(async (req) => {
   }
 
   try {
-    // Validate environment variables
+    // 1. Authenticate user
+    const user = await verifySupabaseUser(req);
+    console.log("Authenticated user:", user.id);
+
+    // 2. Validate environment variables
     if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
       console.error("Missing Razorpay credentials");
       return new Response(
@@ -57,7 +88,7 @@ serve(async (req) => {
       );
     }
 
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
       console.error("Missing Supabase credentials");
       return new Response(
         JSON.stringify({ error: "Database not configured" }),
@@ -65,10 +96,11 @@ serve(async (req) => {
       );
     }
 
+    // 3. Parse request body
     const body: CreateOrderRequest = await req.json();
     const { amcFormId, systemCount, customerName, customerEmail, customerPhone } = body;
 
-    // Validate required fields
+    // 4. Validate required fields
     if (!amcFormId || !systemCount || !customerName || !customerEmail) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
@@ -76,7 +108,7 @@ serve(async (req) => {
       );
     }
 
-    // Validate and calculate amount
+    // 5. Validate and calculate amount
     const { valid, amount } = validateAmount(systemCount);
     if (!valid) {
       return new Response(
@@ -87,7 +119,7 @@ serve(async (req) => {
 
     console.log(`Creating Razorpay order for AMC: ${amcFormId}, Systems: ${systemCount}, Amount: ₹${amount}`);
 
-    // Create Razorpay order
+    // 6. Create Razorpay order
     const razorpayOrderData = {
       amount: amount * 100, // Razorpay expects amount in paise
       currency: "INR",
@@ -122,29 +154,38 @@ serve(async (req) => {
     const razorpayOrder = await razorpayResponse.json();
     console.log("Razorpay order created:", razorpayOrder.id);
 
-    // Store order in database
+    // 7. Store order in database
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // Insert new payment record (each Razorpay order gets its own record)
     const { error: dbError } = await supabase
       .from("amc_payments")
-      .upsert({
+      .insert({
         amc_form_id: amcFormId,
         razorpay_order_id: razorpayOrder.id,
         amount: amount,
         system_count: systemCount,
         status: "created",
         currency: "INR",
-        created_at: new Date().toISOString(),
-      }, {
-        onConflict: "amc_form_id",
+        metadata: {
+          customer_name: customerName,
+          customer_email: customerEmail,
+          customer_phone: customerPhone,
+        },
       });
 
     if (dbError) {
-      console.error("Database error:", dbError);
-      // Continue anyway - the payment can still proceed
+      console.error("Database error storing payment record:", dbError);
+      // This is critical - webhook won't work without this record
+      return new Response(
+        JSON.stringify({ error: "Failed to store payment record" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // Return order details for frontend
+    console.log("Payment record stored successfully for order:", razorpayOrder.id);
+
+    // 8. Return order details for frontend
     return new Response(
       JSON.stringify({
         success: true,
@@ -168,6 +209,13 @@ serve(async (req) => {
     );
 
   } catch (error) {
+    if (error.message.includes("Authorization") || error.message.includes("session")) {
+      console.error("Authentication error:", error.message);
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
     console.error("Error creating order:", error);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),

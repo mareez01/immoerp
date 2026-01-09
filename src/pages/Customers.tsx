@@ -314,19 +314,63 @@ export default function CustomersPage() {
     try {
       setIsSending(true);
 
-      const { error } = await (supabase
-        .from('customer_reminders' as any)
-        .insert({
-          customer_user_id: selectedCustomer.user_id,
-          reminder_type: reminderForm.type,
-          channel: reminderForm.channel,
-          subject: reminderForm.subject || `${formatStatus(reminderForm.type)} Reminder`,
-          message: reminderForm.message,
-          sent_by: session.user.id,
-          status: 'sent'
-        }) as any);
+      const subject = reminderForm.subject || `${formatStatus(reminderForm.type)} Reminder - FL Smartech`;
+      
+      // Build HTML email content
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #1d4ed8, #3b82f6); padding: 20px; text-align: center;">
+            <h1 style="color: white; margin: 0;">FL Smartech</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 5px 0 0;">Computer AMC Services</p>
+          </div>
+          <div style="padding: 30px; background: #f9fafb;">
+            <p style="margin: 0 0 10px;">Dear ${selectedCustomer.name},</p>
+            <div style="white-space: pre-wrap; line-height: 1.6;">${reminderForm.message}</div>
+            <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+            <p style="color: #6b7280; font-size: 14px; margin: 0;">
+              Best regards,<br/>
+              FL Smartech Private Limited<br/>
+              <a href="mailto:support@flsmartech.com" style="color: #3b82f6;">support@flsmartech.com</a>
+            </p>
+          </div>
+        </div>
+      `;
 
-      if (error) throw error;
+      // If channel is email, send via edge function
+      if (reminderForm.channel === 'email') {
+        const { data, error: emailError } = await supabase.functions.invoke('send-customer-email', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: {
+            to: selectedCustomer.email,
+            toName: selectedCustomer.name,
+            subject: subject,
+            htmlContent: htmlContent,
+            textContent: reminderForm.message,
+            customerId: selectedCustomer.user_id,
+            reminderType: reminderForm.type,
+          },
+        });
+
+        if (emailError) throw new Error(emailError.message || 'Failed to send email');
+        if (data?.error) throw new Error(data.error);
+      } else {
+        // For non-email channels, just log it
+        const { error } = await (supabase
+          .from('customer_reminders' as any)
+          .insert({
+            customer_user_id: selectedCustomer.user_id,
+            reminder_type: reminderForm.type,
+            channel: reminderForm.channel,
+            subject: subject,
+            message: reminderForm.message,
+            sent_by: session.user.id,
+            status: 'sent'
+          }) as any);
+
+        if (error) throw error;
+      }
 
       // Update last contacted
       await (supabase

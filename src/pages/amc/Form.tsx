@@ -12,7 +12,6 @@ import { ContextStep } from './components/ContextStep';
 import { SystemsStep } from './components/SystemsStep';
 import { SchedulingStep } from './components/SchedulingStep';
 import { ReviewStep } from './components/ReviewStep';
-import { AMCHeader } from './components/AMCHeader';
 
 // Helper to bypass Supabase type checking for tables added via migration
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,9 +92,22 @@ export const AMCForm: React.FC = () => {
   const [step, setStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Pre-fill customer info from authenticated user (non-editable)
   const methods = useForm<AMCFormValues>({
     defaultValues: {
-      customer: { email: user?.email || '', full_name: '', phone: '', company_name: '', user_role: '', department: '', city: '', district: '', state: '', preferred_lang: 'english', preferred_contact_method: 'whatsapp' },
+      customer: { 
+        email: user?.email || '', 
+        full_name: user?.full_name || '', 
+        phone: '', 
+        company_name: '', 
+        user_role: '', 
+        department: '', 
+        city: '', 
+        district: '', 
+        state: '', 
+        preferred_lang: 'english', 
+        preferred_contact_method: 'whatsapp' 
+      },
       context: { system_usage_purpose: '', previous_service_history: '', consent_remote_access: false, remote_software_preference: '', languages_known: ['english'] },
       systems: [],
       scheduling: { scheduled_date: '', scheduled_time: '', downtime_tolerance: '' },
@@ -243,7 +255,6 @@ export const AMCForm: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <AMCHeader />
       <div className="p-4 md:p-8">
         <div className="max-w-3xl mx-auto">
           <Card className="shadow-lg">

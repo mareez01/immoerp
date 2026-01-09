@@ -32,7 +32,7 @@ const navItems: NavItem[] = [
   { icon: Building2, label: 'Customers', path: '/customers', roles: ['admin', 'support', 'bookkeeping'] },
   { icon: FileText, label: 'Invoices', path: '/invoices', roles: ['admin', 'bookkeeping', 'support'] },
   { icon: Wrench, label: 'Worksheets', path: '/worksheets', roles: ['admin', 'technician'] },
-  { icon: Ticket, label: 'Support Tickets', path: '/tickets', roles: ['admin', 'support'] },
+  { icon: Ticket, label: 'Support Tickets', path: '/tickets', roles: ['admin', 'support', 'technician'] },
   // Customer portal items
   { icon: ClipboardList, label: 'My Orders', path: '/portal/orders', customerOnly: true },
   { icon: FileText, label: 'My Invoices', path: '/portal/invoices', customerOnly: true },
@@ -76,7 +76,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
                 <Wrench className="h-4 w-4 text-white" />
               </div>
-              <span className="text-lg font-bold text-white">AMC ERP</span>
+              <span className="text-lg font-bold text-white">FLSMARTECH AMC</span>
             </div>
           )}
           {collapsed && (

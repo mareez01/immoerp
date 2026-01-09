@@ -7,12 +7,15 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format, subMonths, startOfMonth, endOfMonth, differenceInDays, addDays } from 'date-fns';
+import TechnicianDashboard from './TechnicianDashboard';
+import SupportDashboard from './SupportDashboard';
 
 const COLORS = ['hsl(199, 89%, 48%)', 'hsl(38, 92%, 50%)', 'hsl(262, 83%, 58%)', 'hsl(142, 71%, 45%)', 'hsl(0, 84%, 60%)'];
 
 interface DashboardStats {
   total_orders: number;
   active_subscriptions: number;
+  active_customers: number;
   pending_invoices: number;
   total_revenue: number;
   open_tickets: number;
@@ -35,18 +38,18 @@ export default function Dashboard() {
 
   const fetchDashboardStats = async () => {
     try {
-      // Fetch orders
+      // Fetch orders with customer info
       const { data: orders, error: ordersError } = await supabase
         .from('amc_responses')
-        .select('amc_form_id, status, assigned_to, created_at')
+        .select('amc_form_id, status, assigned_to, created_at, customer_user_id')
         .eq('unsubscribed', false);
 
       if (ordersError) throw ordersError;
 
-      // Fetch invoices
+      // Fetch invoices with paid_at for accurate revenue calculation
       const { data: invoices, error: invoicesError } = await supabase
         .from('invoices')
-        .select('id, amount, status, due_date, validity_end');
+        .select('id, amount, status, due_date, validity_start, validity_end, paid_at, created_at');
 
       if (invoicesError) throw invoicesError;
 
@@ -73,10 +76,19 @@ export default function Dashboard() {
       const total_orders = user?.role === 'technician' 
         ? orders?.filter(o => o.assigned_to === user.profile_id).length || 0
         : orders?.length || 0;
-        
+      
+      // Active subscriptions = paid invoices with valid validity_end in future
+      const now = new Date();
+      
       const active_subscriptions = invoices?.filter(i => 
-        i.status === 'paid' && i.validity_end && new Date(i.validity_end) > new Date()
+        i.status === 'paid' && i.validity_end && new Date(i.validity_end) > now
       ).length || 0;
+
+      // Unique active customers (unique customer_user_id from active orders)
+      const activeCustomerIds = new Set(
+        orders?.filter(o => o.status === 'active' && o.customer_user_id).map(o => o.customer_user_id)
+      );
+      const active_customers = activeCustomerIds.size;
 
       const pending_invoices = invoices?.filter(i => i.status !== 'paid' && i.status !== 'cancelled').length || 0;
       const total_revenue = invoices?.filter(i => i.status === 'paid').reduce((sum, i) => sum + Number(i.amount), 0) || 0;
@@ -98,7 +110,7 @@ export default function Dashboard() {
         orders_by_status[status] = (orders_by_status[status] || 0) + 1;
       });
 
-      // Monthly revenue (last 6 months)
+      // Monthly revenue (last 6 months) - use paid_at date for accurate tracking
       const monthly_revenue: { month: string; revenue: number }[] = [];
       for (let i = 5; i >= 0; i--) {
         const monthDate = subMonths(new Date(), i);
@@ -107,8 +119,9 @@ export default function Dashboard() {
         
         const monthRevenue = invoices?.filter(inv => {
           if (inv.status !== 'paid') return false;
-          const dueDate = new Date(inv.due_date);
-          return dueDate >= monthStart && dueDate <= monthEnd;
+          // Use paid_at if available, otherwise fall back to created_at
+          const paymentDate = inv.paid_at ? new Date(inv.paid_at) : new Date(inv.created_at);
+          return paymentDate >= monthStart && paymentDate <= monthEnd;
         }).reduce((sum, inv) => sum + Number(inv.amount), 0) || 0;
 
         monthly_revenue.push({
@@ -136,6 +149,7 @@ export default function Dashboard() {
       setStats({
         total_orders,
         active_subscriptions,
+        active_customers,
         pending_invoices,
         total_revenue,
         open_tickets,
@@ -156,6 +170,17 @@ export default function Dashboard() {
   // Redirect customers to their portal
   if (isCustomer) {
     return <Navigate to="/portal/orders" replace />;
+  }
+
+  // Show technician-specific dashboard
+  if (user?.role === 'technician') {
+    return <TechnicianDashboard />;
+  }
+
+  // Only admin and bookkeeping see the full dashboard
+  // Support staff have their own dashboard
+  if (user?.role === 'support') {
+    return <SupportDashboard />;
   }
 
   if (isLoading) {
@@ -188,10 +213,10 @@ export default function Dashboard() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <StatCard title="Total Orders" value={stats.total_orders} icon={ClipboardList} />
-        <StatCard title="Active Subscriptions" value={stats.active_subscriptions} icon={Users} />
-        <StatCard title="Pending Invoices" value={stats.pending_invoices} icon={CreditCard} iconClassName="bg-warning/10" />
+        <StatCard title="Active Customers" value={stats.active_customers} icon={Users} iconClassName="bg-success/10" />
+        <StatCard title="Active AMCs" value={stats.active_subscriptions} icon={CreditCard} />
         <StatCard title="Open Tickets" value={stats.open_tickets} icon={MessageSquare} iconClassName="bg-info/10" />
-        <StatCard title="Total Revenue" value={`₹${(stats.total_revenue / 1000).toFixed(0)}K`} icon={IndianRupee} iconClassName="bg-success/10" />
+        <StatCard title="Total Revenue" value={`₹${stats.total_revenue.toLocaleString()}`} icon={IndianRupee} iconClassName="bg-success/10" />
         <StatCard 
           title="Service Time" 
           value={`${Math.floor(stats.total_logged_minutes / 60)}h ${stats.total_logged_minutes % 60}m`} 

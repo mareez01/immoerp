@@ -300,10 +300,9 @@ export default function StaffPage() {
         staff: formData,
       };
 
-      const res = await fetch(
-      "http://localhost:3000/api/admin/create-staff",
+      const {data:res, error:dataError} = await supabase.functions.invoke(
+      "create-staff",
       {
-        method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${accessToken}`,

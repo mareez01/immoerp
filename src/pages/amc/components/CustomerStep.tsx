@@ -3,6 +3,8 @@ import { useFormContext } from 'react-hook-form';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
+import { useAMCAuth } from '@/contexts/AMCAuthContext';
+import { Lock } from 'lucide-react';
 
 // Role categories for better UX
 const ROLE_OPTIONS = [
@@ -33,23 +35,49 @@ const ROLE_OPTIONS = [
 ];
 
 export const CustomerStep: React.FC = () => {
+  const { user } = useAMCAuth();
   const { register, setValue, watch, formState: { errors } } = useFormContext();
   const customerErrors = (errors as any).customer;
   const currentRole = watch('customer.user_role');
   const currentLang = watch('customer.preferred_lang');
   const currentContact = watch('customer.preferred_contact_method');
 
+  // Check if user is authenticated - if so, name and email are locked
+  const isAuthenticated = !!user?.id;
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="space-y-2">
-        <Label>Full Name <span className="text-red-500">*</span></Label>
-        <Input {...register('customer.full_name', { required: 'Required' })} placeholder="John Doe" />
+        <Label className="flex items-center gap-2">
+          Full Name <span className="text-red-500">*</span>
+          {isAuthenticated && <Lock className="h-3 w-3 text-muted-foreground" />}
+        </Label>
+        <Input 
+          {...register('customer.full_name', { required: 'Required' })} 
+          placeholder="John Doe"
+          disabled={isAuthenticated}
+          className={isAuthenticated ? 'bg-muted cursor-not-allowed' : ''}
+        />
         {customerErrors?.full_name && <p className="text-sm text-red-500">{customerErrors.full_name.message}</p>}
+        {isAuthenticated && (
+          <p className="text-xs text-muted-foreground">Linked to your account</p>
+        )}
       </div>
       <div className="space-y-2">
-        <Label>Email <span className="text-red-500">*</span></Label>
-        <Input type="email" {...register('customer.email', { required: 'Required', pattern: { value: /^\S+@\S+$/i, message: 'Invalid email' } })} />
+        <Label className="flex items-center gap-2">
+          Email <span className="text-red-500">*</span>
+          {isAuthenticated && <Lock className="h-3 w-3 text-muted-foreground" />}
+        </Label>
+        <Input 
+          type="email" 
+          {...register('customer.email', { required: 'Required', pattern: { value: /^\S+@\S+$/i, message: 'Invalid email' } })}
+          disabled={isAuthenticated}
+          className={isAuthenticated ? 'bg-muted cursor-not-allowed' : ''}
+        />
         {customerErrors?.email && <p className="text-sm text-red-500">{customerErrors.email.message}</p>}
+        {isAuthenticated && (
+          <p className="text-xs text-muted-foreground">Linked to your account</p>
+        )}
       </div>
       <div className="space-y-2">
         <Label>Phone <span className="text-red-500">*</span></Label>

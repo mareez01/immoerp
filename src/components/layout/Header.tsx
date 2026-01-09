@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Bell, Search, LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,10 +13,12 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { ProfileModal } from '@/components/ProfileModal';
 
 export function Header() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
 
   const handleLogout = async () => {
     await logout();
@@ -44,12 +46,12 @@ export function Header() {
         )}
 
         {/* Notifications */}
-        <Button variant="ghost" size="icon" className="relative">
+        {/* <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
           <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
             3
           </span>
-        </Button>
+        </Button> */}
 
         {/* User Menu */}
         <DropdownMenu>
@@ -67,7 +69,7 @@ export function Header() {
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setProfileModalOpen(true)}>
               <User className="h-4 w-4 mr-2" />
               Profile
             </DropdownMenuItem>
@@ -78,6 +80,9 @@ export function Header() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Profile Modal */}
+        <ProfileModal open={profileModalOpen} onOpenChange={setProfileModalOpen} />
       </div>
     </header>
   );

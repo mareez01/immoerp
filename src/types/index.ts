@@ -14,10 +14,11 @@ export interface User {
 }
 
 // AMC Order Types
-export type OrderStatus = 'new' | 'pending' | 'in_progress' | 'completed' | 'cancelled';
-export type PaymentStatus = 'pending' | 'paid' | 'overdue' | 'refunded';
+export type OrderStatus = 'new' | 'active' | 'inactive' | 'cancelled';
+export type PaymentStatus = 'Pending' | 'Paid' | 'overdue' | 'refunded';
 export type UrgencyLevel = 'low' | 'medium' | 'high' | 'critical';
-export type AppointmentStatus = 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'rescheduled';
+export type AppointmentStatus = 'scheduled' | 'confirmed' | 'cancelled';
+export type WorkStatus = 'pending' | 'in_progress' | 'completed' | 'awaiting_approval';
 
 export interface AMCOrder {
   amc_form_id: string;
@@ -33,7 +34,7 @@ export interface AMCOrder {
   consent_remote_access: boolean;
   payment_id?: string;
   order_id?: string;
-  payment_status: string;
+  payment_status: PaymentStatus | string;
   created_at: string;
   updated_at: string;
   user_role: string;
@@ -46,6 +47,7 @@ export interface AMCOrder {
   preferred_lang: string;
   amount?: string;
   status: OrderStatus;
+  work_status?: WorkStatus;
   amc_started: boolean;
   notes?: string;
   issue_category?: string;
@@ -54,6 +56,10 @@ export interface AMCOrder {
   assigned_to?: string;
   service_work_description?: string;
   unsubscribed: boolean;
+  
+  // Subscription tracking
+  subscription_start_date?: string;
+  subscription_end_date?: string;
   
   // Usage pattern fields
   daily_usage_hours?: string;
@@ -171,20 +177,27 @@ export interface CustomerInteraction {
 }
 
 // Invoice Types
+export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+
 export interface Invoice {
   id: string;
   amc_order_id: string;
-  customer_id: string;
-  customer_name: string;
   invoice_number: string;
   amount: number;
-  status: 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+  status: InvoiceStatus;
   invoice_url?: string;
   contract_url?: string;
   validity_start?: string;
   validity_end?: string;
   due_date: string;
+  paid_at?: string;
   created_at: string;
+  updated_at?: string;
+}
+
+export interface InvoiceWithCustomer extends Invoice {
+  customer_name: string;
+  customer_email: string;
 }
 
 // Dashboard Types

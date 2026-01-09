@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { formatAmcId } from '@/lib/utils';
+import { formatAmcId, cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useOrderNotifications } from '@/hooks/use-realtime';
 import { Switch } from '@/components/ui/switch';
@@ -357,13 +357,19 @@ export default function Orders() {
 
   // Handle order cancellation - sets both status and appointment to cancelled
   const handleCancelOrder = (orderId: string) => {
+    const currentOrder = orders.find(o => o.amc_form_id === orderId);
+    
     const updates: Partial<AMCOrder> = {
       status: 'cancelled',
       appointment_status: 'cancelled',
       unsubscribed: true,
+      work_status: 'resolved', // Mark work as resolved since it's cancelled
+      internal_notes: currentOrder?.internal_notes 
+        ? `${currentOrder.internal_notes}\n\n[CANCELLED on ${format(new Date(), 'PPpp')}]`
+        : `[CANCELLED on ${format(new Date(), 'PPpp')}]`,
     };
     
-    handleUpdateOrder(orderId, updates, 'Order has been cancelled');
+    handleUpdateOrder(orderId, updates, 'Order has been cancelled and moved to Cancelled tab');
   };
 
   // Handle work status for tracking technician workflow - ADMIN ONLY
@@ -392,15 +398,24 @@ export default function Orders() {
   };
 
   const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: 0, new: 0, active: 0, inactive: 0 };
+    const counts: Record<string, number> = { all: 0, new: 0, active: 0, inactive: 0, cancelled: 0 };
     orders.forEach(o => {
       counts.all++;
-      const status = o.unsubscribed ? 'inactive' : (o.status || 'new');
-      // Only count the 3 valid statuses
-      if (status === 'new') counts.new++;
-      else if (status === 'active') counts.active++;
-      else if (status === 'inactive') counts.inactive++;
-      else counts.new++; // Default unknown to new
+      // Determine actual status
+      let status = o.status || 'new';
+      
+      // Cancelled takes precedence
+      if (status === 'cancelled' || (o.unsubscribed && o.appointment_status === 'cancelled')) {
+        counts.cancelled++;
+      } else if (o.unsubscribed || status === 'inactive') {
+        counts.inactive++;
+      } else if (status === 'new') {
+        counts.new++;
+      } else if (status === 'active') {
+        counts.active++;
+      } else {
+        counts.new++; // Default unknown to new
+      }
     });
     return counts;
   }, [orders]);
@@ -424,8 +439,16 @@ export default function Orders() {
   const filteredOrders = useMemo(() => {
     if (selectedTab === 'all') return orders;
     return orders.filter(o => {
-      const status = o.unsubscribed ? 'inactive' : (o.status || 'new');
-      return status === selectedTab;
+      let status = o.status || 'new';
+      
+      // Determine actual status for filtering
+      if (selectedTab === 'cancelled') {
+        return status === 'cancelled' || (o.unsubscribed && o.appointment_status === 'cancelled');
+      } else if (selectedTab === 'inactive') {
+        return (o.unsubscribed && status !== 'cancelled') || (status === 'inactive' && !o.unsubscribed);
+      } else {
+        return status === selectedTab && !o.unsubscribed;
+      }
     });
   }, [orders, selectedTab]);
 
@@ -434,6 +457,7 @@ export default function Orders() {
     { value: 'new', label: 'New', count: statusCounts.new || 0 },
     { value: 'active', label: 'Active', count: statusCounts.active || 0 },
     { value: 'inactive', label: 'Inactive', count: statusCounts.inactive || 0 },
+    { value: 'cancelled', label: 'Cancelled', count: statusCounts.cancelled || 0 },
   ];
 
   const columns: Column<AMCOrder>[] = [
@@ -475,11 +499,52 @@ export default function Orders() {
       key: 'status',
       header: 'Status',
       cell: (order) => {
-        const status = order.unsubscribed ? 'inactive' : (order.status || 'new');
+        let status = order.status || 'new';
+        
+        // Show cancelled status if order is cancelled
+        if (status === 'cancelled' || (order.unsubscribed && order.appointment_status === 'cancelled')) {
+          status = 'cancelled';
+        } else if (order.unsubscribed || status === 'inactive') {
+          status = 'inactive';
+        }
+        
         return (
           <StatusBadge variant={status as any}>
             {formatStatus(status)}
           </StatusBadge>
+        );
+      }
+    },
+    {
+      key: 'subscription_end_date',
+      header: 'Validity',
+      cell: (order) => {
+        if (!order.subscription_end_date) {
+          return <span className="text-sm text-muted-foreground italic">Not started</span>;
+        }
+        const endDate = new Date(order.subscription_end_date);
+        const now = new Date();
+        const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (daysLeft < 0) {
+          return (
+            <div className="text-sm">
+              <p className="font-medium text-destructive">Expired</p>
+              <p className="text-muted-foreground">{format(endDate, 'MMM dd, yyyy')}</p>
+            </div>
+          );
+        }
+        
+        return (
+          <div className="text-sm">
+            <p className={cn(
+              "font-medium",
+              daysLeft <= 30 ? "text-warning" : "text-success"
+            )}>
+              {daysLeft} days left
+            </p>
+            <p className="text-muted-foreground">{format(endDate, 'MMM dd, yyyy')}</p>
+          </div>
         );
       }
     },
@@ -979,11 +1044,55 @@ function OrderDetails({
               </div>
               <div>
                 <p className="text-muted-foreground">Payment Status</p>
-                <StatusBadge variant={order.payment_status === 'SUCCESS' ? 'paid' : 'pending'}>
+                <StatusBadge variant={order.payment_status === 'Paid' || order.payment_status === 'SUCCESS' ? 'paid' : 'pending'}>
                   {order.payment_status || 'Pending'}
                 </StatusBadge>
               </div>
             </div>
+            
+            {/* Subscription Validity */}
+            {order.subscription_start_date && order.subscription_end_date && (
+              <>
+                <Separator className="my-4" />
+                <div className={cn(
+                  "rounded-lg p-4 border",
+                  new Date(order.subscription_end_date) < new Date() 
+                    ? "bg-red-50 border-red-200 dark:bg-red-950/20" 
+                    : "bg-green-50 border-green-200 dark:bg-green-950/20"
+                )}>
+                  <h5 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                    <Calendar className="h-4 w-4" />
+                    Subscription Validity
+                    {new Date(order.subscription_end_date) < new Date() ? (
+                      <StatusBadge variant="cancelled" size="sm">Expired</StatusBadge>
+                    ) : (
+                      <StatusBadge variant="active" size="sm">Active</StatusBadge>
+                    )}
+                  </h5>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Start Date</p>
+                      <p className="font-semibold">{format(new Date(order.subscription_start_date), 'PPP')}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">End Date</p>
+                      <p className="font-semibold">{format(new Date(order.subscription_end_date), 'PPP')}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Days Remaining</p>
+                      <p className="font-semibold">
+                        {(() => {
+                          const daysLeft = Math.ceil((new Date(order.subscription_end_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                          if (daysLeft < 0) return <span className="text-destructive">Expired {Math.abs(daysLeft)} days ago</span>;
+                          if (daysLeft <= 30) return <span className="text-warning">{daysLeft} days</span>;
+                          return <span className="text-success">{daysLeft} days</span>;
+                        })()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
             
             {/* Scheduled Appointment */}
             {(order.scheduled_date || order.scheduled_time) && (
@@ -1410,7 +1519,7 @@ function AssignmentForm({ order, technicians, onAssign, isSubmitting }: {
   }) => void;
   isSubmitting: boolean;
 }) {
-  const [selectedTech, setSelectedTech] = useState(order.assigned_to || '');
+  const [selectedTech, setSelectedTech] = useState(order.assigned_to || '__unassign__');
   const [workStatus, setWorkStatus] = useState(order.work_status || 'idle');
   const [urgencyLevel, setUrgencyLevel] = useState(order.urgency_level || 'normal');
   const [internalNotes, setInternalNotes] = useState(order.internal_notes || '');
@@ -1418,7 +1527,7 @@ function AssignmentForm({ order, technicians, onAssign, isSubmitting }: {
 
   const handleSubmit = () => {
     onAssign({
-      assigned_to: selectedTech || null,
+      assigned_to: selectedTech === '__unassign__' ? null : selectedTech,
       work_status: workStatus,
       urgency_level: urgencyLevel,
       internal_notes: internalNotes,
@@ -1472,7 +1581,7 @@ function AssignmentForm({ order, technicians, onAssign, isSubmitting }: {
             <SelectValue placeholder="Select a technician..." />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">Unassign</SelectItem>
+            <SelectItem value="__unassign__">Unassign</SelectItem>
             {technicians.map(tech => (
               <SelectItem key={tech.id} value={tech.id}>
                 <div className="flex items-center gap-2">
@@ -1569,7 +1678,7 @@ function AssignmentForm({ order, technicians, onAssign, isSubmitting }: {
       <div className="flex justify-end pt-4 border-t">
         <Button onClick={handleSubmit} disabled={isSubmitting} className="w-full sm:w-auto">
           <UserPlus className="h-4 w-4 mr-2" />
-          {isSubmitting ? 'Saving...' : selectedTech ? 'Assign & Save' : 'Save Changes'}
+          {isSubmitting ? 'Saving...' : selectedTech && selectedTech !== '__unassign__' ? 'Assign & Save' : 'Save Changes'}
         </Button>
       </div>
     </div>
