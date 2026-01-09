@@ -6,7 +6,7 @@ setlocal enabledelayedexpansion
 
 REM Configuration
 set REGISTRY=ghcr.io
-set OWNER=fl-smartech
+set OWNER=immoco
 set IMAGE_NAME=amc-erp
 set VERSION=%1
 if "%VERSION%"=="" set VERSION=latest
