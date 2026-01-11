@@ -313,26 +313,16 @@ export default function StaffPage() {
       }
     );
 
-    const text = await res.text();
 
-    if (!res.ok) {
-      console.error("Edge function error:", text);
-      throw new Error(text);
+    if (dataError) {
+      console.error("Edge function error:", dataError);
+      throw new Error(dataError);
     }
 
-    const fnData = JSON.parse(text);
-  
+
       // Attempt to parse the function response (it may be string/Uint8Array)
-      let result: any = fnData;
-      try {
-        if (fnData instanceof Uint8Array) {
-          result = JSON.parse(new TextDecoder().decode(fnData));
-        } else if (typeof fnData === 'string') {
-          result = JSON.parse(fnData);
-        }
-      } catch (e) {
-        // fallback: leave result as-is
-      }
+      const result = res;
+      console.log(res);
 
       // Show success message returned from function if present
       const successMsg = result?.message || 'Staff added successfully';

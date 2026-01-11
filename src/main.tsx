@@ -13,10 +13,8 @@ const searchParams = new URLSearchParams(window.location.search);
  * - localhost with ?portal=customer → Customer Portal (for testing)
  * - localhost with ?portal=staff or default → Staff Panel (for testing)
  */
-const isCustomerPortal = 
-  hostname.includes('customer.flsmartech.com') || 
-  hostname.startsWith('customer.') ||
-  searchParams.get('portal') === 'customer';
+let isCustomerPortal = false;
+if (hostname.includes('customer.flsmartech.com')) isCustomerPortal = true;
 
 // Staff portal as default, customer portal for customer subdomain
 const AppToRender = isCustomerPortal ? <AMCApp /> : <App />;

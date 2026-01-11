@@ -44,7 +44,7 @@ export function ProfileModal({ open, onOpenChange }: ProfileModalProps) {
   };
 
   const handleSave = async () => {
-    if (!user?.profile_id) {
+    if (!user?.id) {
       toast.error('Profile ID not found');
       return;
     }
@@ -58,8 +58,9 @@ export function ProfileModal({ open, onOpenChange }: ProfileModalProps) {
           phone: formData.phone,
           department: formData.department,
           updated_at: new Date().toISOString(),
+          
         })
-        .eq('id', user.profile_id);
+        .eq('user_id', user.id);
 
       if (error) throw error;
 

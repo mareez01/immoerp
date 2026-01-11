@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAMCAuth } from '@/contexts/AMCAuthContext';
 import { toast } from 'sonner';
 import { Loader2, Lock, Eye, EyeOff, CheckCircle, AlertCircle } from 'lucide-react';
+import { Footer } from '@/components/layout/Footer';
 
 export default function AMCResetPassword() {
   const [password, setPassword] = useState('');
@@ -68,7 +69,8 @@ export default function AMCResetPassword() {
 
   if (!hasValidToken && !session) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 p-4">
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 to-gray-100">
+        <div className="flex-1 flex items-center justify-center p-4">
         <Card className="w-full max-w-md shadow-xl border-0">
           <CardHeader className="text-center pb-2">
             <div className="flex justify-center mb-4">
@@ -94,12 +96,15 @@ export default function AMCResetPassword() {
             </Link>
           </CardContent>
         </Card>
+        </div>
+        <Footer />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 p-4">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 to-gray-100">
+      <div className="flex-1 flex items-center justify-center p-4">
       <Card className="w-full max-w-md shadow-xl border-0">
         <CardHeader className="text-center pb-2">
           <div className="flex justify-center mb-4">
@@ -191,6 +196,8 @@ export default function AMCResetPassword() {
           )}
         </CardContent>
       </Card>
+      </div>
+      <Footer />
     </div>
   );
 }

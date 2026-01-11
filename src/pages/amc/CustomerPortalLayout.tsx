@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { LogOut, Home, Plus, FileText, Ticket, HelpCircle, ChevronDown, Menu, X, CreditCard, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Footer } from '@/components/layout/Footer';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -180,19 +181,7 @@ export default function CustomerPortalLayout() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t bg-white py-6 mt-auto">
-        <div className="container mx-auto px-4 text-center">
-          <p className="text-sm text-gray-500">
-            © {new Date().getFullYear()} FL Smartech. All rights reserved.
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            Need help? Contact us at{' '}
-            <a href="mailto:support@flsmartech.com" className="text-blue-600 hover:underline">
-              support@flsmartech.com
-            </a>
-          </p>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { Footer } from '@/components/layout/Footer';
 
 export default function ForgotPassword() {
   const { resetPassword } = useAuth();
@@ -37,7 +38,8 @@ export default function ForgotPassword() {
 
   if (emailSent) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-8">
+      <div className="min-h-screen flex flex-col bg-background">
+        <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-md text-center">
           <div className="flex justify-center mb-6">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
@@ -68,12 +70,15 @@ export default function ForgotPassword() {
             </Link>
           </div>
         </div>
+        </div>
+        <Footer />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-8">
+    <div className="min-h-screen flex flex-col bg-background">
+      <div className="flex-1 flex items-center justify-center p-8">
       <div className="w-full max-w-md">
         <div className="flex justify-center mb-8">
           <div className="flex h-16 w-16 items-center justify-center rounded-xl gradient-primary">
@@ -121,6 +126,8 @@ export default function ForgotPassword() {
           </Link>
         </div>
       </div>
+      </div>
+      <Footer />
     </div>
   );
 }

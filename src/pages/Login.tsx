@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import {Footer} from '@/components/layout/Footer'
 
 export default function Login() {
   const navigate = useNavigate();
@@ -204,7 +205,7 @@ export default function Login() {
               </form>
             </TabsContent>
 
-            <TabsContent value="signup">
+            {/* <TabsContent value="signup">
               <form onSubmit={handleSignup} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="signup-name">Full Name</Label>
@@ -270,12 +271,14 @@ export default function Login() {
                   {isLoading ? 'Creating account...' : 'Create Account'}
                 </Button>
               </form>
-            </TabsContent>
+            </TabsContent> */}
           </Tabs>
 
           <p className="text-xs text-center text-muted-foreground mt-6">
-            Staff members should use their assigned credentials. Customers can sign up for portal access.
+            Staff members should use their assigned credentials. 
+            <a className='text-green-800' href='https://customer.flsmartech.com'>Customers can access their orders here</a>.
           </p>
+          <Footer />
         </div>
       </div>
     </div>

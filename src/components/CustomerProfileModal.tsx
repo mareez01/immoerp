@@ -52,13 +52,13 @@ export function CustomerProfileModal({ open, onOpenChange }: CustomerProfileModa
     setIsSaving(true);
     try {
       const { error } = await supabase
-        .from('amc_responses')
+        .from('profiles')
         .update({
           full_name: formData.full_name,
           phone: formData.phone,
           company_name: formData.company_name,
         })
-        .eq('customer_user_id', user.id);
+        .eq('user_id', user.profile_id);
 
       if (error) throw error;
 

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { Footer } from '@/components/layout/Footer';
 
 export default function ResetPassword() {
   const navigate = useNavigate();
@@ -86,7 +87,8 @@ export default function ResetPassword() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-8">
+    <div className="min-h-screen flex flex-col bg-background">
+      <div className="flex-1 flex items-center justify-center p-8">
       <div className="w-full max-w-md">
         <div className="flex justify-center mb-8">
           <div className="flex h-16 w-16 items-center justify-center rounded-xl gradient-primary">
@@ -159,6 +161,8 @@ export default function ResetPassword() {
           </Button>
         </form>
       </div>
+      </div>
+      <Footer />
     </div>
   );
 }

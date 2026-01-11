@@ -48,20 +48,22 @@ export const AMCAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
   const fetchAndUpdateProfile = async (userId: string, currentUser: AMCAuthUser) => {
     try {
       const { data: customerData } = await supabase
-        .from('amc_responses')
-        .select('amc_form_id, full_name, phone, company_name')
-        .eq('customer_user_id', userId)
+        .from('profiles')
+        .select('full_name, phone, email, user_id, company_name')
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+
 
       if (customerData) {
         setUser(prev => prev ? {
           ...prev,
           full_name: customerData.full_name || prev.full_name,
           phone: customerData.phone,
-          company_name: customerData.company_name,
-          profile_id: customerData.amc_form_id,
+          profile_id: customerData.user_id, 
+          company_name: customerData.company_name
         } : prev);
       }
     } catch (error) {
