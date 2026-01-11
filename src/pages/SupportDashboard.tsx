@@ -79,18 +79,24 @@ export default function SupportDashboard() {
       // Fetch tickets
       const { data: tickets, error: ticketsError } = await supabase
         .from('support_tickets')
-        .select(`
-          id, subject, status, priority, created_at, updated_at, assigned_to, amc_order_id,
-          customer:profiles!support_tickets_customer_user_id_fkey (full_name)
-        `)
+        .select('id, subject, status, priority, created_at, updated_at, assigned_to, amc_order_id, customer_user_id')
         .order('created_at', { ascending: false });
 
       if (ticketsError) throw ticketsError;
 
+      // Fetch customer profiles separately (since customer_user_id references auth.users, not profiles)
+      const customerIds = [...new Set((tickets || []).map(t => t.customer_user_id).filter(Boolean))];
+      const { data: customerProfiles } = await supabase
+        .from('profiles')
+        .select('user_id, full_name')
+        .in('user_id', customerIds);
+      
+      const customerMap = new Map(customerProfiles?.map(p => [p.user_id, p.full_name]) || []);
+
       // Process tickets data
       const processedTickets = (tickets || []).map(t => ({
         ...t,
-        customer_name: (t.customer as any)?.full_name || 'Unknown Customer'
+        customer_name: customerMap.get(t.customer_user_id) || 'Unknown Customer'
       }));
 
       // Filter for open/in_progress tickets

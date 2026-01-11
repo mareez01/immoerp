@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useAMCAuth } from '@/contexts/AMCAuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Sheet,
   SheetContent,
@@ -14,15 +14,30 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { cn, formatAmcId } from '@/lib/utils';
+import { AMCPromotionPanel } from '@/components/amc/AMCPromotionPanel';
+import { AMCEducationTour } from '@/components/amc/AMCEducationTour';
+import { AMCBotButton } from '@/components/amc/AMCBotButton';
+import { useAMCGrowth } from '@/hooks/use-amc-growth';
 
 export default function CustomerDashboard() {
   const { user, session } = useAMCAuth();
+  const navigate = useNavigate();
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [worksheets, setWorksheets] = useState<any[]>([]);
   const [isLoadingWorksheets, setIsLoadingWorksheets] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+  // AMC Growth Agent hook
+  const {
+    shouldShowTour,
+    hasActiveAMC,
+    customerData,
+    handleTourComplete,
+    handleTourDismiss,
+    triggerTour,
+  } = useAMCGrowth();
 
   useEffect(() => {
     if (session?.user?.id) {
@@ -140,6 +155,36 @@ export default function CustomerDashboard() {
           </div>
         </Link>
       </div>
+
+      {/* AMC Promotion Panel - Only shown for users without active AMC */}
+      {!(hasActiveAMC || activeOrders.length > 0) && (
+        <AMCPromotionPanel
+          hasActiveAMC={false}
+          ticketCount={customerData.ticketCount}
+          systemAge={customerData.systemCount > 0 ? 24 : undefined}
+          onViewPlans={() => navigate('/amc/new-order')}
+          onTalkToSupport={() => navigate('/amc/support')}
+        />
+      )}
+
+      {/* Floating AMC Bot Button - Always visible */}
+      <AMCBotButton
+        onClick={triggerTour}
+        hasActiveAMC={hasActiveAMC || activeOrders.length > 0}
+      />
+
+      {/* AMC Education Tour Modal */}
+      <AMCEducationTour
+        isOpen={shouldShowTour}
+        onClose={handleTourDismiss}
+        onComplete={handleTourComplete}
+        customerData={{
+          ticketCount: customerData.ticketCount,
+          systemCount: customerData.systemCount,
+          totalSpent: customerData.totalSpent,
+          hasWarrantyExpired: customerData.hasWarrantyExpired,
+        }}
+      />
 
       {/* Orders List */}
       <div className="rounded-xl border bg-card shadow-card">

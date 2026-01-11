@@ -127,7 +127,7 @@ export default function CustomerPortalLayout() {
                 My Profile
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <a href="mailto:support@flsmartech.com" className="flex items-center">
+                <a href="mailto:flsmartechpvtltd@gmail.com" className="flex items-center">
                   <HelpCircle className="h-4 w-4 mr-2" />
                   Get Help
                 </a>

@@ -75,7 +75,9 @@ export default function SupportTicketsPage() {
 
   const isAdmin = user?.role === 'admin';
   const isSupport = user?.role === 'support';
-  const canManage = isAdmin || isSupport;
+  const isTechnician = user?.role === 'technician';
+  const canManage = isAdmin || isSupport || isTechnician;
+
 
   // Fetch on mount
   useEffect(() => {
@@ -161,6 +163,7 @@ export default function SupportTicketsPage() {
         .select('*')
         .order('updated_at', { ascending: false });
 
+
       if (error) throw error;
 
       // Fetch customer profiles
@@ -178,6 +181,8 @@ export default function SupportTicketsPage() {
         .from('profiles')
         .select('id, full_name')
         .in('id', assignedIds);
+
+
 
       const staffMap = new Map(staffProfiles?.map(s => [s.id, s.full_name]) || []);
 
@@ -197,6 +202,8 @@ export default function SupportTicketsPage() {
       setIsLoading(false);
     }
   };
+
+
 
   const fetchStaff = async () => {
     try {

@@ -18,6 +18,7 @@ export function CustomerProfileModal({ open, onOpenChange }: CustomerProfileModa
   const { user } = useAMCAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
   
   const [formData, setFormData] = useState({
     full_name: user?.full_name || '',

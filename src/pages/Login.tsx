@@ -205,7 +205,7 @@ export default function Login() {
               </form>
             </TabsContent>
 
-            {/* <TabsContent value="signup">
+            <TabsContent value="signup">
               <form onSubmit={handleSignup} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="signup-name">Full Name</Label>
@@ -271,7 +271,7 @@ export default function Login() {
                   {isLoading ? 'Creating account...' : 'Create Account'}
                 </Button>
               </form>
-            </TabsContent> */}
+            </TabsContent>
           </Tabs>
 
           <p className="text-xs text-center text-muted-foreground mt-6">

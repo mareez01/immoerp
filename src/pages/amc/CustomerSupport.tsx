@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, MessageSquare, Send, Clock, User, ChevronRight, AlertCircle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Plus, MessageSquare, Send, Clock, User, ChevronRight, AlertCircle, CheckCircle, XCircle, Loader2, Mail, ImageIcon, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -342,6 +342,34 @@ export default function CustomerSupport() {
           <Plus className="h-4 w-4" />
           New Ticket
         </Button>
+      </div>
+
+      {/* Info Banner - Image Sharing Reminder */}
+      <div className="mb-4 rounded-xl border border-blue-200 dark:border-blue-800 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 p-4">
+        <div className="flex items-start gap-3">
+          <div className="h-10 w-10 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center flex-shrink-0">
+            <Info className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-1">Need to share screenshots or images?</h3>
+            <p className="text-sm text-blue-700 dark:text-blue-300 mb-2">
+              If you're facing an issue and want to share images or screenshots for better assistance, please email them to us.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <a 
+                href="mailto:flsmartechpvtltd@gmail.com?subject=Support%20Request%20-%20Image%20Attachment" 
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+              >
+                <Mail className="h-4 w-4" />
+                flsmartechpvtltd@gmail.com
+              </a>
+              <span className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                <ImageIcon className="h-3.5 w-3.5" />
+                Attach screenshots, error images, or photos
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main Content - Split View */}
