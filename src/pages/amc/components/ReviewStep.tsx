@@ -188,7 +188,7 @@ export const ReviewStep: React.FC = () => {
             <Shield className="h-4 w-4" />
             <span>FL Smartech AMC</span>
           </div>
-          <h2 className="text-2xl font-bold mb-1">Your IT Insurance Policy</h2>
+          <h2 className="text-2xl font-bold mb-1">Your Affordable AMC Plan</h2>
           <p className="text-blue-100 text-sm">Complete device protection for just ₹999/year</p>
           
           {/* Quick Stats */}
@@ -199,7 +199,7 @@ export const ReviewStep: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 bg-white/10 backdrop-blur rounded-full px-3 py-1.5">
               <Clock className="h-4 w-4 text-green-300" />
-              <span className="text-sm font-medium">24-48hr Response</span>
+              <span className="text-sm font-medium">Pickup within 24-48hr</span>
             </div>
             <div className="flex items-center gap-2 bg-white/10 backdrop-blur rounded-full px-3 py-1.5">
               <MapPin className="h-4 w-4 text-pink-300" />
